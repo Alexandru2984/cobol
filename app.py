@@ -37,13 +37,37 @@ def index():
         
         headers = []
         body = raw_output
-        if "\n\n" in raw_output:
-            head_part, body = raw_output.split("\n\n", 1)
-            for line in head_part.split("\n"):
+        separator = None
+        for sep in ("\r\n\r\n", "\n\n", "\n \n"):
+            if sep in raw_output:
+                separator = sep
+                break
+        if separator:
+            head_part, body = raw_output.split(separator, 1)
+            for line in head_part.replace("\r\n", "\n").split("\n"):
                 if ":" in line:
                     k, v = line.split(":", 1)
                     headers.append((k.strip(), v.strip()))
-        
-        return Response(body, headers=headers, mimetype="text/html")
+
+        status = 200
+        content_type = "text/html; charset=utf-8"
+        filtered_headers = []
+        for k, v in headers:
+            if k.lower() == "content-type":
+                content_type = v
+            elif k.lower() == "status":
+                try:
+                    status = int(v.split()[0])
+                except ValueError:
+                    pass
+            else:
+                filtered_headers.append((k, v))
+
+        return Response(body, status=status, headers=filtered_headers,
+                        content_type=content_type)
     except Exception as e:
         return f"Eroare COBOL: {str(e)}", 500
+
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000, debug=False)
