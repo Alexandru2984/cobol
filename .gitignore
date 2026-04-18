@@ -10,6 +10,11 @@ hello
 
 # Project specific data files (ISAM databases)
 data/*.dat
+data/.tmptoken
+data/backups/
+
+# Secrets
+.env
 
 # Python virtual environment and cache
 __pycache__/
