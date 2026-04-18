@@ -1,51 +1,51 @@
 # 📜 The Ledger of Ages
 
-O aplicație web (CGI) scrisă în **COBOL pur**, folosind baze de date indexate (**ISAM**) și standardul CGI pentru generarea interfeței.
+A web application (CGI) written in **pure COBOL**, using indexed databases (**ISAM**) and the CGI standard for interface generation.
 
 ---
 
-## 🛠️ Stack Tehnologic
-*   **Limbaj:** [GnuCOBOL](https://gnucobol.sourceforge.io/) (cobc)
-*   **Baza de date:** **ISAM** (Indexed Sequential Access Method) nativ COBOL via `ORGANIZATION IS INDEXED`.
-*   **Interfață:** **CGI** (Common Gateway Interface) - Generare HTML direct în `stdout`.
-*   **Server (Wrapper):** Python `http.server --cgi` sau Flask (pentru testare locală rapidă).
+## 🛠️ Technology Stack
+*   **Language:** [GnuCOBOL](https://gnucobol.sourceforge.io/) (cobc)
+*   **Database:** **ISAM** (Indexed Sequential Access Method), native to COBOL via `ORGANIZATION IS INDEXED`.
+*   **Interface:** **CGI** (Common Gateway Interface) — HTML generated directly to `stdout`.
+*   **Server (Wrapper):** Python `http.server --cgi` or Flask (for quick local testing).
 
 ---
 
-## 📂 Structura Proiectului
-*   `ledger.cbl`: Programul principal de raportare (generare tabel HTML din ISAM).
-*   `seed.cbl`: Utilitate pentru popularea inițială a bazei de date cu tranzacții.
-*   `hello.cbl`: Test de concept CGI "Hello World".
-*   `data/ledger.dat`: Fișierul bazei de date indexate (creat automat la prima rulare).
-*   `run_demo.sh`: Script de automatizare pentru compilare și execuție demo.
+## 📂 Project Structure
+*   `ledger.cbl`: Main reporting program (generates the HTML table from ISAM).
+*   `seed.cbl`: Utility for initial population of the database with transactions.
+*   `hello.cbl`: "Hello World" CGI proof of concept.
+*   `data/ledger.dat`: The indexed database file (created automatically on first run).
+*   `run_demo.sh`: Automation script for compilation and demo execution.
 
 ---
 
-## 🚀 Cum rulez?
+## 🚀 How do I run it?
 
-### 1. Instalare (pe sisteme bazate pe Debian/Ubuntu)
+### 1. Install (on Debian/Ubuntu-based systems)
 ```bash
 sudo apt update && sudo apt install -y gnucobol
 ```
 
-### 2. Compilare și Populare (Seed)
+### 2. Compile and Populate (Seed)
 ```bash
 cobc -x -free seed.cbl -o seed
 ./seed
 ```
 
-### 3. Compilare Raport Web
+### 3. Compile the Web Report
 ```bash
 cobc -x -free ledger.cbl -o ledger.cgi
 ```
 
-### 4. Vizualizare Rezultat (Local)
-Puteți rula binarul direct pentru a vedea HTML-ul generat:
+### 4. View the Result (Local)
+You can run the binary directly to see the generated HTML:
 ```bash
 ./ledger.cgi
 ```
 
-Sau rulați scriptul de demo complet:
+Or run the full demo script:
 ```bash
 chmod +x run_demo.sh
 ./run_demo.sh
@@ -53,10 +53,10 @@ chmod +x run_demo.sh
 
 ---
 
-## 🏗️ Ce urmează?
-- [ ] Implementarea gestionării input-ului **POST** direct în COBOL (pentru adăugarea de tranzacții dintr-un formular web).
-- [ ] Adăugarea unei rutine de calcul pentru soldul total (Balance).
-- [ ] Stil HTML/CSS minimal integrat în binar.
+## 🏗️ What's next?
+- [ ] Implement **POST** input handling directly in COBOL (to add transactions from a web form).
+- [ ] Add a routine to compute the total balance.
+- [ ] Minimal HTML/CSS styling embedded in the binary.
 
 ---
-*Acest proiect a fost creat ca o demonstrație de programare "vint-age modernă" în cadrul unei sesiuni Gemini CLI.*
+*This project was built as a demonstration of "modern vint-age" programming during a Gemini CLI session.*
