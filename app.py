@@ -4,18 +4,17 @@ import os
 
 app = Flask(__name__)
 
-# Calea absolută către binarul nostru
+# Calea absolută este critică
 BIN_PATH = "/home/micu/cobol/ledger.cgi"
-# Ne asigurăm că directorul de date există
-os.makedirs("/home/micu/cobol/data", exist_ok=True)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # Pregătim variabilele de mediu pentru CGI
+    # Asiguram acces la binarele GnuCOBOL in mediu (calea /usr/bin)
     env = os.environ.copy()
     env["REQUEST_METHOD"] = request.method
+    env["QUERY_STRING"] = request.query_string.decode("utf-8")
+    env["HTTP_COOKIE"] = request.headers.get("Cookie", "")
     
-    # Dacă este POST, trimitem datele către binar
     input_data = None
     if request.method == "POST":
         input_data = request.get_data()
@@ -23,7 +22,6 @@ def index():
     else:
         env["CONTENT_LENGTH"] = "0"
 
-    # Executăm binarul COBOL
     try:
         process = subprocess.Popen(
             [BIN_PATH],
@@ -35,17 +33,17 @@ def index():
         )
         stdout, stderr = process.communicate(input=input_data)
         
-        if stderr:
-            print(f"COBOL Error: {stderr.decode()}")
-
-        # Extragem body-ul (sărim peste header-ul 'Content-type: text/html\n\n')
-        output = stdout.decode(errors="ignore")
-        parts = output.split("\n\n", 1)
-        body = parts[1] if len(parts) > 1 else output
+        raw_output = stdout.decode(errors="ignore")
         
-        return Response(body, mimetype="text/html")
+        headers = []
+        body = raw_output
+        if "\n\n" in raw_output:
+            head_part, body = raw_output.split("\n\n", 1)
+            for line in head_part.split("\n"):
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    headers.append((k.strip(), v.strip()))
+        
+        return Response(body, headers=headers, mimetype="text/html")
     except Exception as e:
-        return f"Eroare Server (COBOL Wrapper): {str(e)}", 500
-
-if __name__ == "__main__":
-    app.run(port=8888)
+        return f"Eroare COBOL: {str(e)}", 500
