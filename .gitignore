@@ -1,0 +1,23 @@
+# GnuCOBOL compiled binaries
+*.cgi
+seed
+hello
+
+# GnuCOBOL object files and temporary files
+*.o
+*.so
+*.lst
+
+# Project specific data files (ISAM databases)
+data/*.dat
+
+# Python virtual environment and cache
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# IDE settings
+.vscode/
+.idea/
