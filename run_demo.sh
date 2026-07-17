@@ -1,19 +1,27 @@
 #!/bin/bash
-echo "=== LEDGER OF AGES DEMO ==="
-echo "1. Curatare date vechi..."
-rm -f data/ledger.dat
+# Compileaza si ruleaza demo-ul intr-un director temporar,
+# fara sa atinga baza de date reala din data/.
+set -euo pipefail
 
-echo "2. Compilare Seed (Populare ISAM)..."
-cobc -x -free seed.cbl -o seed
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEMO_DIR="$(mktemp -d /tmp/ledger-demo.XXXXXX)"
+trap 'rm -rf "$DEMO_DIR"' EXIT
 
-echo "3. Compilare Ledger (Core logic)..."
-cobc -x -free ledger.cbl -o ledger.cgi
+echo "=== LEDGER OF AGES DEMO (sandbox: $DEMO_DIR) ==="
+mkdir -p "$DEMO_DIR/data"
+cd "$DEMO_DIR"
 
-echo "4. Executie Populare Baza de Date..."
+echo "1. Compilare Seed (Populare ISAM)..."
+cobc -x -free "$SRC_DIR/seed.cbl" -o seed
+
+echo "2. Compilare Ledger (Core logic)..."
+cobc -x -free "$SRC_DIR/ledger.cbl" -o ledger.cgi
+
+echo "3. Executie Populare Baza de Date..."
 ./seed
 
-echo "5. Generare Raport Web (COBOL CGI Output)..."
+echo "4. Generare Raport Web (COBOL CGI Output)..."
 echo "------------------------------------------------"
-./ledger.cgi
+REQUEST_METHOD=GET QUERY_STRING="" HTTP_COOKIE="" ./ledger.cgi
 echo "------------------------------------------------"
 echo "DEMO COMPLET."

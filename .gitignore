@@ -10,8 +10,16 @@ hello
 
 # Project specific data files (ISAM databases)
 data/*.dat
+data/*.dat.1
 data/.tmptoken
+data/audit.log
 data/backups/
+
+# Build artifacts from deploy.sh
+*.new
+
+# Pytest cache
+.pytest_cache/
 
 # Secrets
 .env
