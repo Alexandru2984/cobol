@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "1/5 Compilare..."
-cobc -x -free ledger.cbl -o ledger.cgi.new
+cobc -x -free ledger.cbl sha256.cbl -o ledger.cgi.new
 cobc -x -free seed.cbl -o seed.new
 
 echo "2/5 Teste (binar compilat separat, date izolate)..."

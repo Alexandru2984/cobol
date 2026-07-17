@@ -11,9 +11,17 @@ FILE-CONTROL.
         ALTERNATE RECORD KEY IS TRANS-DATE WITH DUPLICATES
         FILE STATUS IS FS-LEDGER.
 
-    SELECT SESSION-FILE ASSIGN TO "data/session.dat"
-        ORGANIZATION IS LINE SEQUENTIAL
-        FILE STATUS IS FS-SESSION.
+    SELECT SESSIONS-FILE ASSIGN TO "data/sessions.dat"
+        ORGANIZATION IS INDEXED
+        ACCESS MODE IS DYNAMIC
+        RECORD KEY IS SESS-TOKEN
+        FILE STATUS IS FS-SESSIONS.
+
+    SELECT LOCKOUT-FILE ASSIGN TO "data/lockout.dat"
+        ORGANIZATION IS INDEXED
+        ACCESS MODE IS DYNAMIC
+        RECORD KEY IS LOCK-IP
+        FILE STATUS IS FS-LOCKOUT.
 
     SELECT TMPTOKEN-FILE ASSIGN TO "data/.tmptoken"
         ORGANIZATION IS LINE SEQUENTIAL
@@ -33,8 +41,17 @@ FD  TRANSACTIONS-FILE.
     05  TRANS-DESC          PIC X(30).
     05  TRANS-AMOUNT        PIC S9(7)V99.
 
-FD  SESSION-FILE.
-01  SESSION-REC             PIC X(48).
+FD  SESSIONS-FILE.
+01  SESS-RECORD.
+    05  SESS-TOKEN          PIC X(32).
+    05  SESS-EXP            PIC 9(12).
+    05  SESS-IP             PIC X(45).
+
+FD  LOCKOUT-FILE.
+01  LOCK-RECORD.
+    05  LOCK-IP             PIC X(45).
+    05  LOCK-FAILS          PIC 9(3).
+    05  LOCK-WIN-EXP        PIC 9(12).
 
 FD  TMPTOKEN-FILE.
 01  TMPTOKEN-REC            PIC X(40).
@@ -44,7 +61,8 @@ FD  AUDIT-FILE.
 
 WORKING-STORAGE SECTION.
 01  FS-LEDGER               PIC XX.
-01  FS-SESSION              PIC XX.
+01  FS-SESSIONS             PIC XX.
+01  FS-LOCKOUT              PIC XX.
 01  FS-TMPTOKEN             PIC XX.
 01  FS-AUDIT                PIC XX.
 01  W-EOF                   PIC X VALUE "N".
@@ -105,14 +123,23 @@ WORKING-STORAGE SECTION.
 01  W-SET-COOKIE            PIC X VALUE "N".
 01  W-NEW-TOKEN             PIC X(32).
 01  W-COOKIE-TOKEN          PIC X(32) VALUE SPACES.
-01  W-STORED-TOKEN          PIC X(32) VALUE SPACES.
 01  W-TOKEN-IDX             PIC 9(4).
 
 *> Server-side session expiry (absolute seconds)
 01  W-SESSION-TTL           PIC 9(6) VALUE 28800.
+01  W-TTL-RAW               PIC X(10).
 01  W-ABS-NOW               PIC 9(12) VALUE 0.
-01  W-SESSION-EXP           PIC 9(12) VALUE 0.
-01  W-EXP-DIGITS            PIC 9(12).
+
+*> Brute-force lockout (per IP)
+01  W-LOCKED                PIC X VALUE "N".
+01  W-MAX-FAILS             PIC 9(3) VALUE 5.
+01  W-LOCK-WINDOW           PIC 9(6) VALUE 900.
+
+*> Password hashing (SHA-256, modul separat sha256.cbl)
+01  W-CFG-HASH              PIC X(64).
+01  W-HASH-IN               PIC X(64).
+01  W-HASH-LEN              USAGE BINARY-LONG.
+01  W-HASH-OUT              PIC X(64).
 
 *> Audit log
 01  W-AUDIT-ACTION          PIC X(10).
@@ -148,6 +175,35 @@ WORKING-STORAGE SECTION.
 01  W-ROW-MATCH             PIC X VALUE "N".
 01  W-ROW-COUNT             PIC 9(6) VALUE 0.
 01  W-DISPLAY-COUNT         PIC ZZZZZ9.
+
+*> Text search in descriptions
+01  W-SEARCH-Q              PIC X(30) VALUE SPACES.
+01  W-Q-LC                  PIC X(30).
+01  W-Q-LEN                 PIC 9(4) VALUE 0.
+01  W-Q-CNT                 PIC 9(4).
+01  W-DESC-LC               PIC X(30).
+
+*> Pagination
+01  W-PAGE                  PIC 9(4) VALUE 1.
+01  W-PAGE-RAW              PIC X(10).
+01  W-PAGE-SIZE             PIC 9(3) VALUE 20.
+01  W-PAGE-START            PIC 9(6).
+01  W-PAGE-END              PIC 9(6).
+01  W-TOTAL-PAGES           PIC 9(4).
+01  W-PAGE-D                PIC ZZZ9.
+01  W-PAGES-D               PIC ZZZ9.
+01  W-PGLNK-D               PIC ZZZ9.
+
+*> URL-encode buffers (pentru linkurile de paginare)
+01  W-ENC-IN                PIC X(60).
+01  W-ENC-OUT               PIC X(200).
+01  W-ENC-OUT-LEN           PIC 9(4).
+01  W-ENC-IN-LEN            PIC 9(4).
+01  W-ENC-I                 PIC 9(4).
+01  W-ENC-BYTE              PIC 9(3).
+01  W-ENC-HI                PIC 9(3).
+01  W-ENC-LO                PIC 9(3).
+01  W-QS                    PIC X(500).
 
 *> Edit mode
 01  W-EDIT-ID-RAW           PIC X(10).
@@ -244,6 +300,20 @@ LOAD-CONFIG.
     IF W-CFG-PASS = SPACES OR LOW-VALUES
         MOVE "cobol2026" TO W-CFG-PASS
     END-IF.
+*>  Daca LEDGER_PASS_HASH (SHA-256 hex) e setat, are prioritate
+*>  si parola in clar nu mai e necesara in mediu.
+    DISPLAY "LEDGER_PASS_HASH" UPON ENVIRONMENT-NAME.
+    ACCEPT W-CFG-HASH FROM ENVIRONMENT-VALUE.
+    IF W-CFG-HASH = LOW-VALUES
+        MOVE SPACES TO W-CFG-HASH
+    END-IF.
+    DISPLAY "LEDGER_SESSION_TTL" UPON ENVIRONMENT-NAME.
+    ACCEPT W-TTL-RAW FROM ENVIRONMENT-VALUE.
+    IF W-TTL-RAW NOT = SPACES AND W-TTL-RAW NOT = LOW-VALUES
+        IF FUNCTION TRIM(W-TTL-RAW) IS NUMERIC
+            MOVE FUNCTION NUMVAL(W-TTL-RAW) TO W-SESSION-TTL
+        END-IF
+    END-IF.
     MOVE FUNCTION CURRENT-DATE TO W-CURRENT-DATE-STR.
     STRING W-CURRENT-DATE-STR(1:4) "-"
            W-CURRENT-DATE-STR(5:2) "-"
@@ -275,25 +345,24 @@ CHECK-SESSION.
             MOVE W-COOKIE-ENV(W-I:32) TO W-COOKIE-TOKEN
         END-IF
     END-IF.
-    MOVE 0 TO W-SESSION-EXP.
-    OPEN INPUT SESSION-FILE.
-    IF FS-SESSION = "00"
-        READ SESSION-FILE
-            AT END CONTINUE
-            NOT AT END
-                MOVE SESSION-REC(1:32) TO W-STORED-TOKEN
-                IF SESSION-REC(34:12) IS NUMERIC
-                    MOVE SESSION-REC(34:12) TO W-SESSION-EXP
-                END-IF
-        END-READ
-        CLOSE SESSION-FILE
+    IF W-COOKIE-TOKEN = SPACES
+        EXIT PARAGRAPH
     END-IF.
-    IF W-COOKIE-TOKEN NOT = SPACES
-       AND W-STORED-TOKEN NOT = SPACES
-       AND W-COOKIE-TOKEN = W-STORED-TOKEN
-       AND W-ABS-NOW <= W-SESSION-EXP
-        MOVE "Y" TO W-LOGGED-IN
+    OPEN I-O SESSIONS-FILE.
+    IF FS-SESSIONS NOT = "00"
+        EXIT PARAGRAPH
     END-IF.
+    MOVE W-COOKIE-TOKEN TO SESS-TOKEN.
+    READ SESSIONS-FILE
+        INVALID KEY CONTINUE
+        NOT INVALID KEY
+            IF W-ABS-NOW <= SESS-EXP
+                MOVE "Y" TO W-LOGGED-IN
+            ELSE
+                DELETE SESSIONS-FILE RECORD
+            END-IF
+    END-READ.
+    CLOSE SESSIONS-FILE.
 
 PARSE-QUERY-STRING.
     IF W-QUERY-STRING = SPACES
@@ -333,10 +402,44 @@ PARSE-QUERY-STRING.
                 WHEN "edit"
                     MOVE W-URL-OUT(1:10) TO W-EDIT-ID-RAW
                     PERFORM PARSE-EDIT-ID
+                WHEN "q"
+                    MOVE W-URL-OUT(1:30) TO W-SEARCH-Q
+                WHEN "page"
+                    MOVE W-URL-OUT(1:10) TO W-PAGE-RAW
+                    PERFORM PARSE-PAGE
             END-EVALUATE
         END-IF
     END-PERFORM.
     PERFORM SANITIZE-RANGE-DATES.
+    IF FUNCTION TRIM(W-SEARCH-Q) = SPACES
+        MOVE SPACES TO W-SEARCH-Q
+        MOVE 0 TO W-Q-LEN
+    ELSE
+        MOVE FUNCTION LOWER-CASE(FUNCTION TRIM(W-SEARCH-Q))
+            TO W-Q-LC
+        COMPUTE W-Q-LEN =
+            FUNCTION LENGTH(FUNCTION TRIM(W-SEARCH-Q))
+    END-IF.
+
+PARSE-PAGE.
+    MOVE "Y" TO W-VALID.
+    IF FUNCTION TRIM(W-PAGE-RAW) = SPACES
+        MOVE "N" TO W-VALID
+    END-IF.
+    PERFORM VARYING W-I FROM 1 BY 1 UNTIL W-I > 10
+        IF W-PAGE-RAW(W-I:1) NOT = SPACE
+            EVALUATE W-PAGE-RAW(W-I:1)
+                WHEN "0" THRU "9" CONTINUE
+                WHEN OTHER MOVE "N" TO W-VALID
+            END-EVALUATE
+        END-IF
+    END-PERFORM.
+    IF W-VALID = "Y"
+        COMPUTE W-PAGE = FUNCTION MIN(
+            FUNCTION MAX(FUNCTION NUMVAL(W-PAGE-RAW), 1), 9999)
+    ELSE
+        MOVE 1 TO W-PAGE
+    END-IF.
 
 PARSE-EDIT-ID.
     MOVE "Y" TO W-VALID.
@@ -602,25 +705,31 @@ DO-LOGIN.
     MOVE "pass" TO W-KEY-LOOKUP.
     PERFORM GET-FORM-VALUE.
     MOVE W-VALUE-OUT(1:40) TO W-LOGIN-PASS.
-    IF FUNCTION TRIM(W-LOGIN-USER) = FUNCTION TRIM(W-CFG-USER)
-       AND FUNCTION TRIM(W-LOGIN-PASS) = FUNCTION TRIM(W-CFG-PASS)
+
+    PERFORM CHECK-LOCKOUT.
+    IF W-LOCKED = "Y"
+        MOVE "Prea multe incercari esuate. Reincearca in 15 minute."
+            TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        MOVE "LOCKOUT" TO W-AUDIT-ACTION
+        MOVE "login blocat (fereastra activa)" TO W-AUDIT-DETAIL
+        PERFORM WRITE-AUDIT
+        EXIT PARAGRAPH
+    END-IF.
+
+    PERFORM VERIFY-CREDENTIALS.
+    IF W-VALID = "Y"
         PERFORM GENERATE-TOKEN
-        MOVE W-NEW-TOKEN TO W-STORED-TOKEN
         MOVE W-NEW-TOKEN TO W-COOKIE-TOKEN
-        COMPUTE W-SESSION-EXP = W-ABS-NOW + W-SESSION-TTL
-        MOVE W-SESSION-EXP TO W-EXP-DIGITS
-        OPEN OUTPUT SESSION-FILE
-        MOVE SPACES TO SESSION-REC
-        STRING W-NEW-TOKEN "|" W-EXP-DIGITS
-            DELIMITED BY SIZE INTO SESSION-REC
-        WRITE SESSION-REC
-        CLOSE SESSION-FILE
+        PERFORM STORE-SESSION
+        PERFORM CLEAR-LOCKOUT
         MOVE "Y" TO W-LOGGED-IN
         MOVE "Y" TO W-SET-COOKIE
         MOVE "LOGIN" TO W-AUDIT-ACTION
         MOVE "autentificare reusita" TO W-AUDIT-DETAIL
         PERFORM WRITE-AUDIT
     ELSE
+        PERFORM RECORD-LOGIN-FAIL
         MOVE "User sau parola incorecte." TO W-ERROR-MSG
         MOVE "Y" TO W-HAS-ERROR
         MOVE "LOGIN-FAIL" TO W-AUDIT-ACTION
@@ -631,14 +740,146 @@ DO-LOGIN.
         PERFORM WRITE-AUDIT
     END-IF.
 
+VERIFY-CREDENTIALS.
+*>  Cu LEDGER_PASS_HASH setat se compara SHA-256(parola introdusa);
+*>  altfel se cade pe compararea in clar cu LEDGER_PASS.
+    MOVE "N" TO W-VALID.
+    IF FUNCTION TRIM(W-LOGIN-USER) NOT = FUNCTION TRIM(W-CFG-USER)
+        EXIT PARAGRAPH
+    END-IF.
+    IF W-CFG-HASH NOT = SPACES
+        MOVE SPACES TO W-HASH-IN
+        MOVE FUNCTION TRIM(W-LOGIN-PASS) TO W-HASH-IN
+        COMPUTE W-HASH-LEN =
+            FUNCTION LENGTH(FUNCTION TRIM(W-LOGIN-PASS))
+        IF FUNCTION TRIM(W-LOGIN-PASS) = SPACES
+            MOVE 0 TO W-HASH-LEN
+        END-IF
+        CALL "SHA256" USING W-HASH-IN W-HASH-LEN W-HASH-OUT
+        IF W-HASH-OUT =
+           FUNCTION LOWER-CASE(FUNCTION TRIM(W-CFG-HASH))
+            MOVE "Y" TO W-VALID
+        END-IF
+    ELSE
+        IF FUNCTION TRIM(W-LOGIN-PASS) = FUNCTION TRIM(W-CFG-PASS)
+            MOVE "Y" TO W-VALID
+        END-IF
+    END-IF.
+
+STORE-SESSION.
+    OPEN I-O SESSIONS-FILE.
+    IF FS-SESSIONS = "35"
+        OPEN OUTPUT SESSIONS-FILE
+        CLOSE SESSIONS-FILE
+        OPEN I-O SESSIONS-FILE
+    END-IF.
+    IF FS-SESSIONS NOT = "00"
+        EXIT PARAGRAPH
+    END-IF.
+    PERFORM PURGE-EXPIRED-SESSIONS.
+    MOVE W-NEW-TOKEN TO SESS-TOKEN.
+    COMPUTE SESS-EXP = W-ABS-NOW + W-SESSION-TTL.
+    MOVE W-REMOTE-ADDR TO SESS-IP.
+    WRITE SESS-RECORD
+        INVALID KEY CONTINUE
+    END-WRITE.
+    CLOSE SESSIONS-FILE.
+
+PURGE-EXPIRED-SESSIONS.
+*>  Curatare lenesa: la fiecare login se sterg sesiunile expirate.
+*>  Fisierul e deja deschis I-O de catre STORE-SESSION.
+    MOVE LOW-VALUES TO SESS-TOKEN.
+    START SESSIONS-FILE KEY IS GREATER THAN SESS-TOKEN
+        INVALID KEY EXIT PARAGRAPH
+    END-START.
+    MOVE "N" TO W-EOF.
+    PERFORM UNTIL W-EOF = "Y"
+        READ SESSIONS-FILE NEXT
+            AT END MOVE "Y" TO W-EOF
+            NOT AT END
+                IF SESS-EXP < W-ABS-NOW
+                    DELETE SESSIONS-FILE RECORD
+                END-IF
+        END-READ
+    END-PERFORM.
+    MOVE "N" TO W-EOF.
+
+CHECK-LOCKOUT.
+    MOVE "N" TO W-LOCKED.
+    OPEN I-O LOCKOUT-FILE.
+    IF FS-LOCKOUT NOT = "00"
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE W-REMOTE-ADDR TO LOCK-IP.
+    READ LOCKOUT-FILE
+        INVALID KEY CONTINUE
+        NOT INVALID KEY
+            IF W-ABS-NOW <= LOCK-WIN-EXP
+                IF LOCK-FAILS >= W-MAX-FAILS
+                    MOVE "Y" TO W-LOCKED
+                END-IF
+            ELSE
+                DELETE LOCKOUT-FILE RECORD
+            END-IF
+    END-READ.
+    CLOSE LOCKOUT-FILE.
+
+RECORD-LOGIN-FAIL.
+    OPEN I-O LOCKOUT-FILE.
+    IF FS-LOCKOUT = "35"
+        OPEN OUTPUT LOCKOUT-FILE
+        CLOSE LOCKOUT-FILE
+        OPEN I-O LOCKOUT-FILE
+    END-IF.
+    IF FS-LOCKOUT NOT = "00"
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE W-REMOTE-ADDR TO LOCK-IP.
+    READ LOCKOUT-FILE
+        INVALID KEY
+            MOVE W-REMOTE-ADDR TO LOCK-IP
+            MOVE 1 TO LOCK-FAILS
+            COMPUTE LOCK-WIN-EXP = W-ABS-NOW + W-LOCK-WINDOW
+            WRITE LOCK-RECORD
+                INVALID KEY CONTINUE
+            END-WRITE
+        NOT INVALID KEY
+            IF W-ABS-NOW > LOCK-WIN-EXP
+                MOVE 1 TO LOCK-FAILS
+                COMPUTE LOCK-WIN-EXP = W-ABS-NOW + W-LOCK-WINDOW
+            ELSE
+                ADD 1 TO LOCK-FAILS
+            END-IF
+            REWRITE LOCK-RECORD
+                INVALID KEY CONTINUE
+            END-REWRITE
+    END-READ.
+    CLOSE LOCKOUT-FILE.
+
+CLEAR-LOCKOUT.
+    OPEN I-O LOCKOUT-FILE.
+    IF FS-LOCKOUT NOT = "00"
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE W-REMOTE-ADDR TO LOCK-IP.
+    READ LOCKOUT-FILE
+        INVALID KEY CONTINUE
+        NOT INVALID KEY DELETE LOCKOUT-FILE RECORD
+    END-READ.
+    CLOSE LOCKOUT-FILE.
+
 DO-LOGOUT.
-    OPEN OUTPUT SESSION-FILE.
-    MOVE SPACES TO SESSION-REC.
-    WRITE SESSION-REC.
-    CLOSE SESSION-FILE.
+    OPEN I-O SESSIONS-FILE.
+    IF FS-SESSIONS = "00"
+        MOVE W-COOKIE-TOKEN TO SESS-TOKEN
+        READ SESSIONS-FILE
+            INVALID KEY CONTINUE
+            NOT INVALID KEY DELETE SESSIONS-FILE RECORD
+        END-READ
+        CLOSE SESSIONS-FILE
+    END-IF.
     MOVE "N" TO W-LOGGED-IN.
     MOVE SPACES TO W-COOKIE-TOKEN.
-    MOVE SPACES TO W-STORED-TOKEN.
     MOVE "L" TO W-SET-COOKIE.
     MOVE "LOGOUT" TO W-AUDIT-ACTION.
     MOVE "sesiune inchisa" TO W-AUDIT-DETAIL.
@@ -981,6 +1222,22 @@ DISPLAY-PAGE.
             "overflow:hidden;height:8px;margin:3px 0;}".
     DISPLAY ".bar-in{background:#16a34a;height:8px;}".
     DISPLAY ".bar-ex{background:#dc2626;height:8px;}".
+    DISPLAY "@media (prefers-color-scheme: dark){".
+    DISPLAY "body{background:#0f172a;color:#e2e8f0;}".
+    DISPLAY ".card{background:#1e293b;box-shadow:0 2px 4px "
+            "rgba(0,0,0,0.4);}".
+    DISPLAY "th{background:#334155;color:#e2e8f0;}".
+    DISPLAY "td{border-bottom:1px solid #334155;}".
+    DISPLAY "input,select{background:#0f172a;color:#e2e8f0;"
+            "border-color:#475569;}".
+    DISPLAY "nav a{color:#e2e8f0;}".
+    DISPLAY ".btn{background:#475569;}".
+    DISPLAY ".btn-del{background:#b91c1c;}".
+    DISPLAY ".btn-edit{background:#0369a1;}".
+    DISPLAY ".err{background:#450a0a;color:#fecaca;}".
+    DISPLAY ".pos{color:#4ade80;}.neg{color:#f87171;}".
+    DISPLAY ".barwrap{background:#334155;}".
+    DISPLAY "}".
     DISPLAY "</style></head><body>".
 
     IF W-HAS-ERROR = "Y"
@@ -1091,6 +1348,11 @@ DISPLAY-TOOLBAR.
             FUNCTION TRIM(W-FROM-DATE) "'>".
     DISPLAY "Pana la: <input type='date' name='to' value='"
             FUNCTION TRIM(W-TO-DATE) "'>".
+    MOVE W-SEARCH-Q TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "Cauta: <input type='text' name='q' maxlength='30' "
+            "placeholder='descriere...' value='"
+            FUNCTION TRIM(W-ESC-OUT) "'>".
     DISPLAY "<button type='submit' class='btn'>Aplica</button>".
     DISPLAY "<button type='submit' class='btn' name='export' "
             "value='csv'>Export CSV</button>".
@@ -1181,14 +1443,19 @@ DISPLAY-TABLE.
             INVALID KEY MOVE "Y" TO W-EOF
         END-START
     END-IF.
+    COMPUTE W-PAGE-START = (W-PAGE - 1) * W-PAGE-SIZE + 1.
+    COMPUTE W-PAGE-END = W-PAGE * W-PAGE-SIZE.
     PERFORM UNTIL W-EOF = "Y"
         READ TRANSACTIONS-FILE NEXT
             AT END MOVE "Y" TO W-EOF
             NOT AT END
                 PERFORM CHECK-ROW-MATCH
                 IF W-ROW-MATCH = "Y"
-                    PERFORM RENDER-ROW
                     ADD 1 TO W-ROW-COUNT
+                    IF W-ROW-COUNT >= W-PAGE-START
+                       AND W-ROW-COUNT <= W-PAGE-END
+                        PERFORM RENDER-ROW
+                    END-IF
                     ADD TRANS-AMOUNT TO W-TOTAL-BALANCE
                     PERFORM UPDATE-CAT-TOTAL
                 END-IF
@@ -1202,6 +1469,93 @@ DISPLAY-TABLE.
             "<td style='text-align:right'><b>"
             W-DISPLAY-TOTAL "</b></td><td></td></tr></tfoot>"
             "</table></div>".
+    PERFORM DISPLAY-PAGINATION.
+
+DISPLAY-PAGINATION.
+    COMPUTE W-TOTAL-PAGES =
+        (W-ROW-COUNT + W-PAGE-SIZE - 1) / W-PAGE-SIZE.
+    IF W-TOTAL-PAGES < 2
+        EXIT PARAGRAPH
+    END-IF.
+    PERFORM BUILD-NAV-QS.
+    MOVE W-PAGE TO W-PAGE-D.
+    MOVE W-TOTAL-PAGES TO W-PAGES-D.
+    DISPLAY "<div class='card' style='display:flex;gap:14px;"
+            "align-items:center;justify-content:center;'>".
+    IF W-PAGE > 1
+        COMPUTE W-PGLNK-D = W-PAGE - 1
+        DISPLAY "<a class='btn' style='text-decoration:none' href='?"
+                FUNCTION TRIM(W-QS) "&page="
+                FUNCTION TRIM(W-PGLNK-D) "'>&laquo; Inapoi</a>"
+    END-IF.
+    DISPLAY "<span>Pagina " FUNCTION TRIM(W-PAGE-D)
+            " din " FUNCTION TRIM(W-PAGES-D) "</span>".
+    IF W-PAGE < W-TOTAL-PAGES
+        COMPUTE W-PGLNK-D = W-PAGE + 1
+        DISPLAY "<a class='btn' style='text-decoration:none' href='?"
+                FUNCTION TRIM(W-QS) "&page="
+                FUNCTION TRIM(W-PGLNK-D) "'>Inainte &raquo;</a>"
+    END-IF.
+    DISPLAY "</div>".
+
+BUILD-NAV-QS.
+*>  Query string cu filtrele curente pentru linkurile de paginare.
+*>  Valorile libere (filter, sort, q) sunt percent-encodate.
+    MOVE SPACES TO W-QS.
+    MOVE W-FILTER-CAT TO W-ENC-IN.
+    PERFORM URL-ENCODE.
+    STRING "filter=" FUNCTION TRIM(W-ENC-OUT)
+        DELIMITED BY SIZE INTO W-QS.
+    MOVE W-SORT-BY TO W-ENC-IN.
+    PERFORM URL-ENCODE.
+    STRING FUNCTION TRIM(W-QS)
+           "&sort=" FUNCTION TRIM(W-ENC-OUT)
+           "&from=" FUNCTION TRIM(W-FROM-DATE)
+           "&to=" FUNCTION TRIM(W-TO-DATE)
+        DELIMITED BY SIZE INTO W-QS.
+    IF W-Q-LEN > 0
+        MOVE W-SEARCH-Q TO W-ENC-IN
+        PERFORM URL-ENCODE
+        STRING FUNCTION TRIM(W-QS)
+               "&q=" FUNCTION TRIM(W-ENC-OUT)
+            DELIMITED BY SIZE INTO W-QS
+    END-IF.
+
+URL-ENCODE.
+*>  Percent-encoding RFC 3986: pastreaza doar caracterele nerezervate.
+    MOVE SPACES TO W-ENC-OUT.
+    MOVE 0 TO W-ENC-OUT-LEN.
+    MOVE 0 TO W-ENC-IN-LEN.
+    PERFORM VARYING W-ENC-I FROM 60 BY -1
+            UNTIL W-ENC-I = 0 OR W-ENC-IN(W-ENC-I:1) NOT = SPACE
+        CONTINUE
+    END-PERFORM.
+    MOVE W-ENC-I TO W-ENC-IN-LEN.
+    PERFORM VARYING W-ENC-I FROM 1 BY 1
+            UNTIL W-ENC-I > W-ENC-IN-LEN
+        EVALUATE W-ENC-IN(W-ENC-I:1)
+            WHEN "a" THRU "z"
+            WHEN "A" THRU "Z"
+            WHEN "0" THRU "9"
+            WHEN "." WHEN "-" WHEN "_" WHEN "~"
+                ADD 1 TO W-ENC-OUT-LEN
+                MOVE W-ENC-IN(W-ENC-I:1)
+                    TO W-ENC-OUT(W-ENC-OUT-LEN:1)
+            WHEN OTHER
+                COMPUTE W-ENC-BYTE =
+                    FUNCTION ORD(W-ENC-IN(W-ENC-I:1)) - 1
+                COMPUTE W-ENC-HI = W-ENC-BYTE / 16
+                COMPUTE W-ENC-LO = FUNCTION MOD(W-ENC-BYTE, 16)
+                ADD 1 TO W-ENC-OUT-LEN
+                MOVE "%" TO W-ENC-OUT(W-ENC-OUT-LEN:1)
+                ADD 1 TO W-ENC-OUT-LEN
+                MOVE HEX-DIGITS(W-ENC-HI + 1:1)
+                    TO W-ENC-OUT(W-ENC-OUT-LEN:1)
+                ADD 1 TO W-ENC-OUT-LEN
+                MOVE HEX-DIGITS(W-ENC-LO + 1:1)
+                    TO W-ENC-OUT(W-ENC-OUT-LEN:1)
+        END-EVALUATE
+    END-PERFORM.
 
 CHECK-ROW-MATCH.
     MOVE "Y" TO W-ROW-MATCH.
@@ -1213,6 +1567,15 @@ CHECK-ROW-MATCH.
     END-IF.
     IF W-TO-DATE NOT = SPACES AND TRANS-DATE > W-TO-DATE
         MOVE "N" TO W-ROW-MATCH
+    END-IF.
+    IF W-Q-LEN > 0 AND W-ROW-MATCH = "Y"
+        MOVE FUNCTION LOWER-CASE(TRANS-DESC) TO W-DESC-LC
+        MOVE 0 TO W-Q-CNT
+        INSPECT W-DESC-LC TALLYING W-Q-CNT
+            FOR ALL W-Q-LC(1:W-Q-LEN)
+        IF W-Q-CNT = 0
+            MOVE "N" TO W-ROW-MATCH
+        END-IF
     END-IF.
 
 RENDER-ROW.

@@ -25,6 +25,7 @@ def workdir(tmp_path_factory):
     (wd / "data").mkdir()
     subprocess.run(
         ["cobc", "-x", "-free", os.path.join(ROOT, "ledger.cbl"),
+         os.path.join(ROOT, "sha256.cbl"),
          "-o", str(wd / "ledger.cgi")],
         check=True,
     )
@@ -37,7 +38,10 @@ def client(workdir, monkeypatch):
     monkeypatch.setenv("LEDGER_DIR", str(workdir))
     monkeypatch.setenv("LEDGER_USER", USER)
     monkeypatch.setenv("LEDGER_PASS", PASS)
-    for name in ("ledger.dat", "session.dat", "audit.log"):
+    monkeypatch.delenv("LEDGER_PASS_HASH", raising=False)
+    monkeypatch.delenv("LEDGER_SESSION_TTL", raising=False)
+    for name in ("ledger.dat", "sessions.dat", "lockout.dat",
+                 "audit.log"):
         p = workdir / "data" / name
         if p.exists():
             p.unlink()
@@ -45,7 +49,9 @@ def client(workdir, monkeypatch):
     import app as app_module
     importlib.reload(app_module)
     app_module.app.config["TESTING"] = True
-    return app_module.app.test_client()
+    # fara cookie jar: jar-ul ar suprascrie header-ele Cookie explicite,
+    # iar testele de multi-sesiune au nevoie de control per-request
+    return app_module.app.test_client(use_cookies=False)
 
 
 def login(client, user=USER, password=PASS):
@@ -186,11 +192,13 @@ def test_invalid_inputs_rejected(client):
     assert b"Descrierea este obligatorie" in resp.data
 
 
-def test_session_expiry(client, workdir):
+def test_session_expiry(client, monkeypatch):
+    import time
+    monkeypatch.setenv("LEDGER_SESSION_TTL", "1")
     _, headers = login(client)
-    session_file = workdir / "data" / "session.dat"
-    token = session_file.read_text()[:32]
-    session_file.write_text(f"{token}|{1:012d}\n")
+    resp = client.get("/", headers=headers)
+    assert b"<h2>Login</h2>" not in resp.data
+    time.sleep(2.1)
     resp = client.get("/", headers=headers)
     assert b"<h2>Login</h2>" in resp.data
 
@@ -201,3 +209,70 @@ def test_logout_invalidates_session(client):
     assert "Max-Age=0" in resp.headers.get("Set-Cookie", "")
     resp = client.get("/", headers=headers)
     assert b"<h2>Login</h2>" in resp.data
+
+
+def test_multi_session(client):
+    _, h1 = login(client)
+    _, h2 = login(client)
+    assert h1 != h2
+    # ambele sesiuni sunt valide simultan
+    assert b"<h2>Login</h2>" not in client.get("/", headers=h1).data
+    assert b"<h2>Login</h2>" not in client.get("/", headers=h2).data
+    # logout pe prima nu o invalideaza pe a doua
+    client.post("/", data={"cmd": "logout"}, headers=h1)
+    assert b"<h2>Login</h2>" in client.get("/", headers=h1).data
+    assert b"<h2>Login</h2>" not in client.get("/", headers=h2).data
+
+
+def test_password_hash_login(client, monkeypatch):
+    import hashlib
+    monkeypatch.setenv("LEDGER_PASS_HASH",
+                       hashlib.sha256(PASS.encode()).hexdigest())
+    monkeypatch.setenv("LEDGER_PASS", "alta-parola-care-nu-conteaza")
+    resp, headers = login(client)  # parola reala, verificata prin hash
+    assert headers, "login prin hash SHA-256 trebuie sa functioneze"
+    resp, headers = login(client, password="alta-parola-care-nu-conteaza")
+    assert not headers, "parola in clar nu mai e acceptata cand exista hash"
+
+
+def test_brute_force_lockout(client):
+    ip = {"X-Real-IP": "203.0.113.7"}
+    for _ in range(5):
+        client.post("/", data={"cmd": "login", "user": USER,
+                               "pass": "gresit"}, headers=ip)
+    # a 6-a incercare e blocata chiar si cu parola corecta
+    resp = client.post("/", data={"cmd": "login", "user": USER,
+                                  "pass": PASS}, headers=ip)
+    assert "Prea multe incercari".encode() in resp.data
+    assert "session=" not in resp.headers.get("Set-Cookie", "")
+    # alt IP nu e afectat
+    resp, headers = login(client)
+    assert headers
+
+
+def test_pagination(client):
+    _, headers = login(client)
+    for i in range(1, 26):
+        add(client, headers, f"2026-07-{i:02d}", "Hobby", f"tx{i:02d}", "-1")
+
+    resp = client.get("/", headers=headers)
+    assert resp.data.count(b"<tr><td>#") == 20
+    assert b"Pagina 1 din 2" in resp.data
+    assert b"Total (25 tranzactii)" in resp.data  # totalul ramane global
+    assert b"-25.00" in resp.data
+
+    resp = client.get("/?page=2", headers=headers)
+    assert resp.data.count(b"<tr><td>#") == 5
+    assert b"Pagina 2 din 2" in resp.data
+    assert b"tx25" in resp.data
+
+
+def test_search(client):
+    _, headers = login(client)
+    add(client, headers, "2026-07-01", "Mancare", "Piata Obor", "-50")
+    add(client, headers, "2026-07-02", "Mancare", "Kaufland", "-80")
+
+    resp = client.get("/?q=PIATA", headers=headers)  # case-insensitive
+    assert b"Piata Obor" in resp.data
+    assert b"Kaufland" not in resp.data
+    assert b"Total (1 tranzactii)" in resp.data

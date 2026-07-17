@@ -1,0 +1,380 @@
+IDENTIFICATION DIVISION.
+PROGRAM-ID. SHA256.
+*> SHA-256 (FIPS 180-4) implementat in COBOL pur, pentru mesaje de
+*> maximum 55 de octeti (un singur bloc de 512 biti) - suficient
+*> pentru hashing de parole. Operatiile pe biti folosesc rutinele
+*> CBL_AND / CBL_XOR; rotatiile si NOT sunt aritmetice.
+*> Interfata: CALL "SHA256" USING mesaj(X-64), lungime(BINARY-LONG),
+*>            digest-hex(X-64).
+
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01  K-VALUES.
+    05  FILLER              PIC 9(10) VALUE 1116352408. *> 428a2f98
+    05  FILLER              PIC 9(10) VALUE 1899447441. *> 71374491
+    05  FILLER              PIC 9(10) VALUE 3049323471. *> b5c0fbcf
+    05  FILLER              PIC 9(10) VALUE 3921009573. *> e9b5dba5
+    05  FILLER              PIC 9(10) VALUE 961987163. *> 3956c25b
+    05  FILLER              PIC 9(10) VALUE 1508970993. *> 59f111f1
+    05  FILLER              PIC 9(10) VALUE 2453635748. *> 923f82a4
+    05  FILLER              PIC 9(10) VALUE 2870763221. *> ab1c5ed5
+    05  FILLER              PIC 9(10) VALUE 3624381080. *> d807aa98
+    05  FILLER              PIC 9(10) VALUE 310598401. *> 12835b01
+    05  FILLER              PIC 9(10) VALUE 607225278. *> 243185be
+    05  FILLER              PIC 9(10) VALUE 1426881987. *> 550c7dc3
+    05  FILLER              PIC 9(10) VALUE 1925078388. *> 72be5d74
+    05  FILLER              PIC 9(10) VALUE 2162078206. *> 80deb1fe
+    05  FILLER              PIC 9(10) VALUE 2614888103. *> 9bdc06a7
+    05  FILLER              PIC 9(10) VALUE 3248222580. *> c19bf174
+    05  FILLER              PIC 9(10) VALUE 3835390401. *> e49b69c1
+    05  FILLER              PIC 9(10) VALUE 4022224774. *> efbe4786
+    05  FILLER              PIC 9(10) VALUE 264347078. *> 0fc19dc6
+    05  FILLER              PIC 9(10) VALUE 604807628. *> 240ca1cc
+    05  FILLER              PIC 9(10) VALUE 770255983. *> 2de92c6f
+    05  FILLER              PIC 9(10) VALUE 1249150122. *> 4a7484aa
+    05  FILLER              PIC 9(10) VALUE 1555081692. *> 5cb0a9dc
+    05  FILLER              PIC 9(10) VALUE 1996064986. *> 76f988da
+    05  FILLER              PIC 9(10) VALUE 2554220882. *> 983e5152
+    05  FILLER              PIC 9(10) VALUE 2821834349. *> a831c66d
+    05  FILLER              PIC 9(10) VALUE 2952996808. *> b00327c8
+    05  FILLER              PIC 9(10) VALUE 3210313671. *> bf597fc7
+    05  FILLER              PIC 9(10) VALUE 3336571891. *> c6e00bf3
+    05  FILLER              PIC 9(10) VALUE 3584528711. *> d5a79147
+    05  FILLER              PIC 9(10) VALUE 113926993. *> 06ca6351
+    05  FILLER              PIC 9(10) VALUE 338241895. *> 14292967
+    05  FILLER              PIC 9(10) VALUE 666307205. *> 27b70a85
+    05  FILLER              PIC 9(10) VALUE 773529912. *> 2e1b2138
+    05  FILLER              PIC 9(10) VALUE 1294757372. *> 4d2c6dfc
+    05  FILLER              PIC 9(10) VALUE 1396182291. *> 53380d13
+    05  FILLER              PIC 9(10) VALUE 1695183700. *> 650a7354
+    05  FILLER              PIC 9(10) VALUE 1986661051. *> 766a0abb
+    05  FILLER              PIC 9(10) VALUE 2177026350. *> 81c2c92e
+    05  FILLER              PIC 9(10) VALUE 2456956037. *> 92722c85
+    05  FILLER              PIC 9(10) VALUE 2730485921. *> a2bfe8a1
+    05  FILLER              PIC 9(10) VALUE 2820302411. *> a81a664b
+    05  FILLER              PIC 9(10) VALUE 3259730800. *> c24b8b70
+    05  FILLER              PIC 9(10) VALUE 3345764771. *> c76c51a3
+    05  FILLER              PIC 9(10) VALUE 3516065817. *> d192e819
+    05  FILLER              PIC 9(10) VALUE 3600352804. *> d6990624
+    05  FILLER              PIC 9(10) VALUE 4094571909. *> f40e3585
+    05  FILLER              PIC 9(10) VALUE 275423344. *> 106aa070
+    05  FILLER              PIC 9(10) VALUE 430227734. *> 19a4c116
+    05  FILLER              PIC 9(10) VALUE 506948616. *> 1e376c08
+    05  FILLER              PIC 9(10) VALUE 659060556. *> 2748774c
+    05  FILLER              PIC 9(10) VALUE 883997877. *> 34b0bcb5
+    05  FILLER              PIC 9(10) VALUE 958139571. *> 391c0cb3
+    05  FILLER              PIC 9(10) VALUE 1322822218. *> 4ed8aa4a
+    05  FILLER              PIC 9(10) VALUE 1537002063. *> 5b9cca4f
+    05  FILLER              PIC 9(10) VALUE 1747873779. *> 682e6ff3
+    05  FILLER              PIC 9(10) VALUE 1955562222. *> 748f82ee
+    05  FILLER              PIC 9(10) VALUE 2024104815. *> 78a5636f
+    05  FILLER              PIC 9(10) VALUE 2227730452. *> 84c87814
+    05  FILLER              PIC 9(10) VALUE 2361852424. *> 8cc70208
+    05  FILLER              PIC 9(10) VALUE 2428436474. *> 90befffa
+    05  FILLER              PIC 9(10) VALUE 2756734187. *> a4506ceb
+    05  FILLER              PIC 9(10) VALUE 3204031479. *> bef9a3f7
+    05  FILLER              PIC 9(10) VALUE 3329325298. *> c67178f2
+01  K-TABLE REDEFINES K-VALUES.
+    05  K-CONST             PIC 9(10) OCCURS 64 TIMES.
+
+01  H-INIT-VALUES.
+    05  FILLER              PIC 9(10) VALUE 1779033703. *> 6a09e667
+    05  FILLER              PIC 9(10) VALUE 3144134277. *> bb67ae85
+    05  FILLER              PIC 9(10) VALUE 1013904242. *> 3c6ef372
+    05  FILLER              PIC 9(10) VALUE 2773480762. *> a54ff53a
+    05  FILLER              PIC 9(10) VALUE 1359893119. *> 510e527f
+    05  FILLER              PIC 9(10) VALUE 2600822924. *> 9b05688c
+    05  FILLER              PIC 9(10) VALUE 528734635. *> 1f83d9ab
+    05  FILLER              PIC 9(10) VALUE 1541459225. *> 5be0cd19
+01  H-INIT-TABLE REDEFINES H-INIT-VALUES.
+    05  H-INIT              PIC 9(10) OCCURS 8 TIMES.
+
+01  POW2-VALUES.
+    05  FILLER              PIC 9(10) VALUE 1.
+    05  FILLER              PIC 9(10) VALUE 2.
+    05  FILLER              PIC 9(10) VALUE 4.
+    05  FILLER              PIC 9(10) VALUE 8.
+    05  FILLER              PIC 9(10) VALUE 16.
+    05  FILLER              PIC 9(10) VALUE 32.
+    05  FILLER              PIC 9(10) VALUE 64.
+    05  FILLER              PIC 9(10) VALUE 128.
+    05  FILLER              PIC 9(10) VALUE 256.
+    05  FILLER              PIC 9(10) VALUE 512.
+    05  FILLER              PIC 9(10) VALUE 1024.
+    05  FILLER              PIC 9(10) VALUE 2048.
+    05  FILLER              PIC 9(10) VALUE 4096.
+    05  FILLER              PIC 9(10) VALUE 8192.
+    05  FILLER              PIC 9(10) VALUE 16384.
+    05  FILLER              PIC 9(10) VALUE 32768.
+    05  FILLER              PIC 9(10) VALUE 65536.
+    05  FILLER              PIC 9(10) VALUE 131072.
+    05  FILLER              PIC 9(10) VALUE 262144.
+    05  FILLER              PIC 9(10) VALUE 524288.
+    05  FILLER              PIC 9(10) VALUE 1048576.
+    05  FILLER              PIC 9(10) VALUE 2097152.
+    05  FILLER              PIC 9(10) VALUE 4194304.
+    05  FILLER              PIC 9(10) VALUE 8388608.
+    05  FILLER              PIC 9(10) VALUE 16777216.
+    05  FILLER              PIC 9(10) VALUE 33554432.
+    05  FILLER              PIC 9(10) VALUE 67108864.
+    05  FILLER              PIC 9(10) VALUE 134217728.
+    05  FILLER              PIC 9(10) VALUE 268435456.
+    05  FILLER              PIC 9(10) VALUE 536870912.
+    05  FILLER              PIC 9(10) VALUE 1073741824.
+    05  FILLER              PIC 9(10) VALUE 2147483648.
+    05  FILLER              PIC 9(10) VALUE 4294967296.
+01  POW2-TABLE REDEFINES POW2-VALUES.
+    05  POW2                PIC 9(10) OCCURS 33 TIMES.
+
+01  HEX-DIGITS              PIC X(16) VALUE "0123456789abcdef".
+
+01  W-BLOCK                 PIC X(64).
+01  W-LEN                   BINARY-LONG.
+01  W-BITLEN                BINARY-LONG.
+
+01  MSG-SCHEDULE.
+    05  W-SCHED             USAGE BINARY-LONG UNSIGNED OCCURS 64.
+
+01  H-STATE.
+    05  H-REG               USAGE BINARY-LONG UNSIGNED OCCURS 8.
+
+01  A-REG                   USAGE BINARY-LONG UNSIGNED.
+01  B-REG                   USAGE BINARY-LONG UNSIGNED.
+01  C-REG                   USAGE BINARY-LONG UNSIGNED.
+01  D-REG                   USAGE BINARY-LONG UNSIGNED.
+01  E-REG                   USAGE BINARY-LONG UNSIGNED.
+01  F-REG                   USAGE BINARY-LONG UNSIGNED.
+01  G-REG                   USAGE BINARY-LONG UNSIGNED.
+01  H8-REG                  USAGE BINARY-LONG UNSIGNED.
+
+01  U-IN                    USAGE BINARY-LONG UNSIGNED.
+01  U-N                     BINARY-LONG.
+01  U-ROT                   USAGE BINARY-LONG UNSIGNED.
+01  U-LOW                   USAGE BINARY-LONG UNSIGNED.
+01  U-OUT                   USAGE BINARY-LONG UNSIGNED.
+01  U-R1                    USAGE BINARY-LONG UNSIGNED.
+01  U-R2                    USAGE BINARY-LONG UNSIGNED.
+01  U-R3                    USAGE BINARY-LONG UNSIGNED.
+01  U-SAVE                  USAGE BINARY-LONG UNSIGNED.
+01  U-X1                    USAGE BINARY-LONG UNSIGNED.
+01  U-Y1                    USAGE BINARY-LONG UNSIGNED.
+01  U-X2                    USAGE BINARY-LONG UNSIGNED.
+01  U-Y2                    USAGE BINARY-LONG UNSIGNED.
+01  U-X3                    USAGE BINARY-LONG UNSIGNED.
+01  U-Y3                    USAGE BINARY-LONG UNSIGNED.
+01  U-CH                    USAGE BINARY-LONG UNSIGNED.
+01  U-MAJ                   USAGE BINARY-LONG UNSIGNED.
+01  U-T1                    PIC 9(12) COMP.
+01  U-T2                    PIC 9(12) COMP.
+01  U-TMP                   PIC 9(12) COMP.
+01  U-HEXV                  USAGE BINARY-LONG UNSIGNED.
+01  U-NIB                   BINARY-LONG.
+
+01  T-IDX                   BINARY-LONG.
+01  B-IDX                   BINARY-LONG.
+01  HX-I                    BINARY-LONG.
+01  HX-J                    BINARY-LONG.
+
+LINKAGE SECTION.
+01  LK-INPUT                PIC X(64).
+01  LK-LEN                  BINARY-LONG.
+01  LK-DIGEST               PIC X(64).
+
+PROCEDURE DIVISION USING LK-INPUT LK-LEN LK-DIGEST.
+MAIN-SHA.
+    MOVE LK-LEN TO W-LEN.
+    IF W-LEN > 55
+        MOVE 55 TO W-LEN
+    END-IF.
+    IF W-LEN < 0
+        MOVE 0 TO W-LEN
+    END-IF.
+    PERFORM PAD-BLOCK.
+    PERFORM BUILD-SCHEDULE.
+    PERFORM COMPRESS.
+    PERFORM EMIT-HEX.
+    GOBACK.
+
+PAD-BLOCK.
+    MOVE LOW-VALUES TO W-BLOCK.
+    IF W-LEN > 0
+        MOVE LK-INPUT(1:W-LEN) TO W-BLOCK(1:W-LEN)
+    END-IF.
+    MOVE FUNCTION CHAR(129) TO W-BLOCK(W-LEN + 1:1).
+    COMPUTE W-BITLEN = W-LEN * 8.
+    COMPUTE U-N = W-BITLEN / 256.
+    MOVE FUNCTION CHAR(U-N + 1) TO W-BLOCK(63:1).
+    COMPUTE U-N = FUNCTION MOD(W-BITLEN, 256).
+    MOVE FUNCTION CHAR(U-N + 1) TO W-BLOCK(64:1).
+
+BUILD-SCHEDULE.
+    PERFORM VARYING T-IDX FROM 1 BY 1 UNTIL T-IDX > 16
+        COMPUTE B-IDX = (T-IDX - 1) * 4 + 1
+        COMPUTE W-SCHED(T-IDX) =
+              (FUNCTION ORD(W-BLOCK(B-IDX:1)) - 1) * 16777216
+            + (FUNCTION ORD(W-BLOCK(B-IDX + 1:1)) - 1) * 65536
+            + (FUNCTION ORD(W-BLOCK(B-IDX + 2:1)) - 1) * 256
+            + (FUNCTION ORD(W-BLOCK(B-IDX + 3:1)) - 1)
+    END-PERFORM.
+    PERFORM VARYING T-IDX FROM 17 BY 1 UNTIL T-IDX > 64
+        MOVE W-SCHED(T-IDX - 2) TO U-IN
+        PERFORM SMALL-SIGMA-1
+        MOVE U-OUT TO U-SAVE
+        MOVE W-SCHED(T-IDX - 15) TO U-IN
+        PERFORM SMALL-SIGMA-0
+        COMPUTE U-T1 = U-SAVE + W-SCHED(T-IDX - 7)
+                     + U-OUT + W-SCHED(T-IDX - 16)
+        COMPUTE W-SCHED(T-IDX) = FUNCTION MOD(U-T1, 4294967296)
+    END-PERFORM.
+
+COMPRESS.
+    PERFORM VARYING T-IDX FROM 1 BY 1 UNTIL T-IDX > 8
+        MOVE H-INIT(T-IDX) TO H-REG(T-IDX)
+    END-PERFORM.
+    MOVE H-REG(1) TO A-REG.
+    MOVE H-REG(2) TO B-REG.
+    MOVE H-REG(3) TO C-REG.
+    MOVE H-REG(4) TO D-REG.
+    MOVE H-REG(5) TO E-REG.
+    MOVE H-REG(6) TO F-REG.
+    MOVE H-REG(7) TO G-REG.
+    MOVE H-REG(8) TO H8-REG.
+    PERFORM VARYING T-IDX FROM 1 BY 1 UNTIL T-IDX > 64
+        PERFORM BIG-SIGMA-1-E
+        PERFORM CH-EFG
+        COMPUTE U-T1 = H8-REG + U-OUT + U-CH
+                     + K-CONST(T-IDX) + W-SCHED(T-IDX)
+        COMPUTE U-T1 = FUNCTION MOD(U-T1, 4294967296)
+        PERFORM BIG-SIGMA-0-A
+        PERFORM MAJ-ABC
+        COMPUTE U-T2 = U-OUT + U-MAJ
+        COMPUTE U-T2 = FUNCTION MOD(U-T2, 4294967296)
+        MOVE G-REG TO H8-REG
+        MOVE F-REG TO G-REG
+        MOVE E-REG TO F-REG
+        COMPUTE U-TMP = D-REG + U-T1
+        COMPUTE E-REG = FUNCTION MOD(U-TMP, 4294967296)
+        MOVE C-REG TO D-REG
+        MOVE B-REG TO C-REG
+        MOVE A-REG TO B-REG
+        COMPUTE U-TMP = U-T1 + U-T2
+        COMPUTE A-REG = FUNCTION MOD(U-TMP, 4294967296)
+    END-PERFORM.
+    COMPUTE U-TMP = H-REG(1) + A-REG.
+    COMPUTE H-REG(1) = FUNCTION MOD(U-TMP, 4294967296).
+    COMPUTE U-TMP = H-REG(2) + B-REG.
+    COMPUTE H-REG(2) = FUNCTION MOD(U-TMP, 4294967296).
+    COMPUTE U-TMP = H-REG(3) + C-REG.
+    COMPUTE H-REG(3) = FUNCTION MOD(U-TMP, 4294967296).
+    COMPUTE U-TMP = H-REG(4) + D-REG.
+    COMPUTE H-REG(4) = FUNCTION MOD(U-TMP, 4294967296).
+    COMPUTE U-TMP = H-REG(5) + E-REG.
+    COMPUTE H-REG(5) = FUNCTION MOD(U-TMP, 4294967296).
+    COMPUTE U-TMP = H-REG(6) + F-REG.
+    COMPUTE H-REG(6) = FUNCTION MOD(U-TMP, 4294967296).
+    COMPUTE U-TMP = H-REG(7) + G-REG.
+    COMPUTE H-REG(7) = FUNCTION MOD(U-TMP, 4294967296).
+    COMPUTE U-TMP = H-REG(8) + H8-REG.
+    COMPUTE H-REG(8) = FUNCTION MOD(U-TMP, 4294967296).
+
+ROTR-32.
+*> U-ROT = rotire dreapta a lui U-IN cu U-N biti
+    COMPUTE U-LOW = FUNCTION MOD(U-IN, POW2(U-N + 1)).
+    COMPUTE U-ROT = (U-IN - U-LOW) / POW2(U-N + 1)
+                  + U-LOW * POW2(33 - U-N).
+
+SMALL-SIGMA-0.
+*> sigma0(x) = ROTR7 ^ ROTR18 ^ SHR3   (input U-IN, output U-OUT)
+    MOVE 7 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R1.
+    MOVE 18 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R2.
+    COMPUTE U-R3 = U-IN / 8.
+    CALL "CBL_XOR" USING U-R1, U-R2 BY VALUE 4.
+    CALL "CBL_XOR" USING U-R2, U-R3 BY VALUE 4.
+    MOVE U-R3 TO U-OUT.
+
+SMALL-SIGMA-1.
+*> sigma1(x) = ROTR17 ^ ROTR19 ^ SHR10  (input U-IN, output U-OUT)
+    MOVE 17 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R1.
+    MOVE 19 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R2.
+    COMPUTE U-R3 = U-IN / 1024.
+    CALL "CBL_XOR" USING U-R1, U-R2 BY VALUE 4.
+    CALL "CBL_XOR" USING U-R2, U-R3 BY VALUE 4.
+    MOVE U-R3 TO U-OUT.
+
+BIG-SIGMA-0-A.
+*> SIGMA0(a) = ROTR2 ^ ROTR13 ^ ROTR22  (output U-OUT)
+    MOVE A-REG TO U-IN.
+    MOVE 2 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R1.
+    MOVE 13 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R2.
+    MOVE 22 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R3.
+    CALL "CBL_XOR" USING U-R1, U-R2 BY VALUE 4.
+    CALL "CBL_XOR" USING U-R2, U-R3 BY VALUE 4.
+    MOVE U-R3 TO U-OUT.
+
+BIG-SIGMA-1-E.
+*> SIGMA1(e) = ROTR6 ^ ROTR11 ^ ROTR25  (output U-OUT)
+    MOVE E-REG TO U-IN.
+    MOVE 6 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R1.
+    MOVE 11 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R2.
+    MOVE 25 TO U-N.
+    PERFORM ROTR-32.
+    MOVE U-ROT TO U-R3.
+    CALL "CBL_XOR" USING U-R1, U-R2 BY VALUE 4.
+    CALL "CBL_XOR" USING U-R2, U-R3 BY VALUE 4.
+    MOVE U-R3 TO U-OUT.
+
+CH-EFG.
+*> Ch(e,f,g) = (e AND f) ^ ((NOT e) AND g)  (output U-CH)
+    MOVE E-REG TO U-X1.
+    MOVE F-REG TO U-Y1.
+    CALL "CBL_AND" USING U-X1, U-Y1 BY VALUE 4.
+    COMPUTE U-X2 = 4294967295 - E-REG.
+    MOVE G-REG TO U-Y2.
+    CALL "CBL_AND" USING U-X2, U-Y2 BY VALUE 4.
+    CALL "CBL_XOR" USING U-Y1, U-Y2 BY VALUE 4.
+    MOVE U-Y2 TO U-CH.
+
+MAJ-ABC.
+*> Maj(a,b,c) = (a AND b) ^ (a AND c) ^ (b AND c)  (output U-MAJ)
+    MOVE A-REG TO U-X1.
+    MOVE B-REG TO U-Y1.
+    CALL "CBL_AND" USING U-X1, U-Y1 BY VALUE 4.
+    MOVE A-REG TO U-X2.
+    MOVE C-REG TO U-Y2.
+    CALL "CBL_AND" USING U-X2, U-Y2 BY VALUE 4.
+    MOVE B-REG TO U-X3.
+    MOVE C-REG TO U-Y3.
+    CALL "CBL_AND" USING U-X3, U-Y3 BY VALUE 4.
+    CALL "CBL_XOR" USING U-Y1, U-Y2 BY VALUE 4.
+    CALL "CBL_XOR" USING U-Y2, U-Y3 BY VALUE 4.
+    MOVE U-Y3 TO U-MAJ.
+
+EMIT-HEX.
+    MOVE SPACES TO LK-DIGEST.
+    PERFORM VARYING HX-I FROM 1 BY 1 UNTIL HX-I > 8
+        MOVE H-REG(HX-I) TO U-HEXV
+        PERFORM VARYING HX-J FROM 8 BY -1 UNTIL HX-J < 1
+            COMPUTE U-NIB = FUNCTION MOD(U-HEXV, 16)
+            MOVE HEX-DIGITS(U-NIB + 1:1)
+                TO LK-DIGEST((HX-I - 1) * 8 + HX-J:1)
+            COMPUTE U-HEXV = U-HEXV / 16
+        END-PERFORM
+    END-PERFORM.
