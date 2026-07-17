@@ -23,8 +23,21 @@ FD  TRANSACTIONS-FILE.
 
 WORKING-STORAGE SECTION.
 01  FS-LEDGER               PIC XX.
+01  W-FORCE                 PIC X(10).
 
 PROCEDURE DIVISION.
+*>  Guard: nu suprascrie o baza de date existenta decat cu SEED_FORCE=1.
+    DISPLAY "SEED_FORCE" UPON ENVIRONMENT-NAME.
+    ACCEPT W-FORCE FROM ENVIRONMENT-VALUE.
+    IF W-FORCE(1:1) NOT = "1"
+        OPEN INPUT TRANSACTIONS-FILE
+        IF FS-LEDGER = "00"
+            CLOSE TRANSACTIONS-FILE
+            DISPLAY "data/ledger.dat exista deja. "
+                    "Ruleaza cu SEED_FORCE=1 pentru a suprascrie."
+            STOP RUN
+        END-IF
+    END-IF.
     DISPLAY "Re-seeding with alternate keys...".
     OPEN OUTPUT TRANSACTIONS-FILE.
     

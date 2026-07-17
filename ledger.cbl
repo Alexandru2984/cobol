@@ -19,6 +19,10 @@ FILE-CONTROL.
         ORGANIZATION IS LINE SEQUENTIAL
         FILE STATUS IS FS-TMPTOKEN.
 
+    SELECT OPTIONAL AUDIT-FILE ASSIGN TO "data/audit.log"
+        ORGANIZATION IS LINE SEQUENTIAL
+        FILE STATUS IS FS-AUDIT.
+
 DATA DIVISION.
 FILE SECTION.
 FD  TRANSACTIONS-FILE.
@@ -30,19 +34,23 @@ FD  TRANSACTIONS-FILE.
     05  TRANS-AMOUNT        PIC S9(7)V99.
 
 FD  SESSION-FILE.
-01  SESSION-REC             PIC X(32).
+01  SESSION-REC             PIC X(48).
 
 FD  TMPTOKEN-FILE.
 01  TMPTOKEN-REC            PIC X(40).
+
+FD  AUDIT-FILE.
+01  AUDIT-REC               PIC X(160).
 
 WORKING-STORAGE SECTION.
 01  FS-LEDGER               PIC XX.
 01  FS-SESSION              PIC XX.
 01  FS-TMPTOKEN             PIC XX.
+01  FS-AUDIT                PIC XX.
 01  W-EOF                   PIC X VALUE "N".
-01  W-DISPLAY-AMOUNT        PIC -ZZZ,ZZ9.99.
+01  W-DISPLAY-AMOUNT        PIC --,---,--9.99.
 01  W-TOTAL-BALANCE         PIC S9(9)V99 VALUE 0.
-01  W-DISPLAY-TOTAL         PIC -ZZZ,ZZZ,ZZ9.99.
+01  W-DISPLAY-TOTAL         PIC --,---,---,--9.99.
 01  W-LAST-ID               PIC 9(6) VALUE 0.
 
 *> CGI environment
@@ -52,6 +60,7 @@ WORKING-STORAGE SECTION.
 01  W-POST-DATA             PIC X(4096).
 01  W-QUERY-STRING          PIC X(1024).
 01  W-COOKIE-ENV            PIC X(1024).
+01  W-REMOTE-ADDR           PIC X(45) VALUE SPACES.
 
 *> Parsed form fields (by name, not position)
 01  FORM-TABLE.
@@ -99,6 +108,26 @@ WORKING-STORAGE SECTION.
 01  W-STORED-TOKEN          PIC X(32) VALUE SPACES.
 01  W-TOKEN-IDX             PIC 9(4).
 
+*> Server-side session expiry (absolute seconds)
+01  W-SESSION-TTL           PIC 9(6) VALUE 28800.
+01  W-ABS-NOW               PIC 9(12) VALUE 0.
+01  W-SESSION-EXP           PIC 9(12) VALUE 0.
+01  W-EXP-DIGITS            PIC 9(12).
+
+*> Audit log
+01  W-AUDIT-ACTION          PIC X(10).
+01  W-AUDIT-DETAIL          PIC X(80).
+01  AUDIT-RING.
+    05  AR-LINE             OCCURS 30 TIMES PIC X(160).
+01  W-AR-TOTAL              PIC 9(6) VALUE 0.
+01  W-AR-IDX                PIC 9(4).
+01  W-AR-K                  PIC 9(6).
+01  W-AR-FROM               PIC 9(6).
+01  W-AUD-TS                PIC X(19).
+01  W-AUD-IP                PIC X(45).
+01  W-AUD-ACT               PIC X(12).
+01  W-AUD-DET               PIC X(90).
+
 01  W-SEED                  PIC 9(9).
 01  W-RAND-VAL              PIC 9(3).
 01  HEX-DIGITS              PIC X(16) VALUE "0123456789abcdef".
@@ -112,6 +141,45 @@ WORKING-STORAGE SECTION.
 *> Query filters
 01  W-FILTER-CAT            PIC X(15) VALUE "ALL".
 01  W-SORT-BY               PIC X(10) VALUE "ID".
+01  W-FROM-DATE             PIC X(10) VALUE SPACES.
+01  W-TO-DATE               PIC X(10) VALUE SPACES.
+01  W-VIEW                  PIC X(10) VALUE "LEDGER".
+01  W-EXPORT                PIC X VALUE "N".
+01  W-ROW-MATCH             PIC X VALUE "N".
+01  W-ROW-COUNT             PIC 9(6) VALUE 0.
+01  W-DISPLAY-COUNT         PIC ZZZZZ9.
+
+*> Edit mode
+01  W-EDIT-ID-RAW           PIC X(10).
+01  W-EDIT-ID               PIC 9(6) VALUE 0.
+01  W-EDIT-MODE             PIC X VALUE "N".
+01  W-EDIT-DATE             PIC X(10).
+01  W-EDIT-CAT              PIC X(15).
+01  W-EDIT-DESC             PIC X(30).
+01  W-EDIT-AMT-STR          PIC -------9.99.
+01  W-UPD-ID                PIC 9(6).
+
+*> CSV export
+01  W-CSV-IN                PIC X(60).
+01  W-CSV-OUT               PIC X(130).
+01  W-CSV-IN-LEN            PIC 9(4).
+01  W-CSV-OUT-LEN           PIC 9(4).
+01  W-CSV-I                 PIC 9(4).
+01  W-CSV-AMT               PIC -------9.99.
+
+*> Monthly report
+01  MONTH-TABLE.
+    05  MONTH-COUNT         PIC 9(3) VALUE 0.
+    05  MONTH-ENTRY         OCCURS 120 TIMES.
+        10  MONTH-KEY       PIC X(7).
+        10  MONTH-INCOME    PIC S9(9)V99.
+        10  MONTH-EXPENSE   PIC S9(9)V99.
+01  W-M-IDX                 PIC 9(3).
+01  W-MAX-FLOW              PIC 9(9)V99 VALUE 0.
+01  W-NET-AMT               PIC S9(9)V99.
+01  W-ABS-EXP               PIC 9(9)V99.
+01  W-BAR-PCT               PIC 9(3).
+01  W-BAR-PCT-D             PIC ZZ9.
 
 *> Input validation
 01  W-VALID                 PIC X VALUE "N".
@@ -136,6 +204,7 @@ WORKING-STORAGE SECTION.
 01  W-CMD                   PIC X(20).
 01  W-DEL-ID-RAW            PIC X(10).
 01  W-DEL-ID                PIC 9(6).
+01  W-OPT-CURRENT           PIC X(15).
 
 PROCEDURE DIVISION.
 MAIN-LOGIC.
@@ -148,8 +217,21 @@ MAIN-LOGIC.
         PERFORM PARSE-POST-BODY
         PERFORM HANDLE-ACTION
     END-IF.
-    PERFORM DISPLAY-PAGE.
+    IF W-LOGGED-IN = "Y" AND W-EXPORT = "Y"
+        PERFORM EXPORT-CSV
+    ELSE
+        PERFORM DISPLAY-PAGE
+    END-IF.
     STOP RUN.
+
+COMPUTE-ABS-NOW.
+    MOVE FUNCTION CURRENT-DATE TO W-CURRENT-DATE-STR.
+    COMPUTE W-ABS-NOW =
+        FUNCTION INTEGER-OF-DATE(
+            FUNCTION NUMVAL(W-CURRENT-DATE-STR(1:8))) * 86400
+      + FUNCTION NUMVAL(W-CURRENT-DATE-STR(9:2)) * 3600
+      + FUNCTION NUMVAL(W-CURRENT-DATE-STR(11:2)) * 60
+      + FUNCTION NUMVAL(W-CURRENT-DATE-STR(13:2)).
 
 LOAD-CONFIG.
     DISPLAY "LEDGER_USER" UPON ENVIRONMENT-NAME.
@@ -167,6 +249,7 @@ LOAD-CONFIG.
            W-CURRENT-DATE-STR(5:2) "-"
            W-CURRENT-DATE-STR(7:2)
            DELIMITED BY SIZE INTO W-TODAY-STR.
+    PERFORM COMPUTE-ABS-NOW.
 
 READ-CGI-ENV.
     DISPLAY "HTTP_COOKIE" UPON ENVIRONMENT-NAME.
@@ -175,6 +258,11 @@ READ-CGI-ENV.
     ACCEPT W-QUERY-STRING FROM ENVIRONMENT-VALUE.
     DISPLAY "REQUEST_METHOD" UPON ENVIRONMENT-NAME.
     ACCEPT W-METHOD FROM ENVIRONMENT-VALUE.
+    DISPLAY "REMOTE_ADDR" UPON ENVIRONMENT-NAME.
+    ACCEPT W-REMOTE-ADDR FROM ENVIRONMENT-VALUE.
+    IF W-REMOTE-ADDR = SPACES OR LOW-VALUES
+        MOVE "-" TO W-REMOTE-ADDR
+    END-IF.
 
 CHECK-SESSION.
     MOVE SPACES TO W-COOKIE-TOKEN.
@@ -187,17 +275,23 @@ CHECK-SESSION.
             MOVE W-COOKIE-ENV(W-I:32) TO W-COOKIE-TOKEN
         END-IF
     END-IF.
+    MOVE 0 TO W-SESSION-EXP.
     OPEN INPUT SESSION-FILE.
     IF FS-SESSION = "00"
         READ SESSION-FILE
             AT END CONTINUE
-            NOT AT END MOVE SESSION-REC TO W-STORED-TOKEN
+            NOT AT END
+                MOVE SESSION-REC(1:32) TO W-STORED-TOKEN
+                IF SESSION-REC(34:12) IS NUMERIC
+                    MOVE SESSION-REC(34:12) TO W-SESSION-EXP
+                END-IF
         END-READ
         CLOSE SESSION-FILE
     END-IF.
     IF W-COOKIE-TOKEN NOT = SPACES
        AND W-STORED-TOKEN NOT = SPACES
        AND W-COOKIE-TOKEN = W-STORED-TOKEN
+       AND W-ABS-NOW <= W-SESSION-EXP
         MOVE "Y" TO W-LOGGED-IN
     END-IF.
 
@@ -226,9 +320,58 @@ PARSE-QUERY-STRING.
                     MOVE W-URL-OUT TO W-FILTER-CAT
                 WHEN "sort"
                     MOVE W-URL-OUT TO W-SORT-BY
+                WHEN "from"
+                    MOVE W-URL-OUT(1:10) TO W-FROM-DATE
+                WHEN "to"
+                    MOVE W-URL-OUT(1:10) TO W-TO-DATE
+                WHEN "view"
+                    MOVE W-URL-OUT(1:10) TO W-VIEW
+                WHEN "export"
+                    IF W-URL-OUT(1:3) = "csv"
+                        MOVE "Y" TO W-EXPORT
+                    END-IF
+                WHEN "edit"
+                    MOVE W-URL-OUT(1:10) TO W-EDIT-ID-RAW
+                    PERFORM PARSE-EDIT-ID
             END-EVALUATE
         END-IF
     END-PERFORM.
+    PERFORM SANITIZE-RANGE-DATES.
+
+PARSE-EDIT-ID.
+    MOVE "Y" TO W-VALID.
+    IF FUNCTION TRIM(W-EDIT-ID-RAW) = SPACES
+        MOVE "N" TO W-VALID
+    END-IF.
+    PERFORM VARYING W-I FROM 1 BY 1 UNTIL W-I > 10
+        IF W-EDIT-ID-RAW(W-I:1) NOT = SPACE
+            EVALUATE W-EDIT-ID-RAW(W-I:1)
+                WHEN "0" THRU "9" CONTINUE
+                WHEN OTHER MOVE "N" TO W-VALID
+            END-EVALUATE
+        END-IF
+    END-PERFORM.
+    IF W-VALID = "Y"
+        COMPUTE W-EDIT-ID = FUNCTION NUMVAL(W-EDIT-ID-RAW)
+    ELSE
+        MOVE 0 TO W-EDIT-ID
+    END-IF.
+
+SANITIZE-RANGE-DATES.
+    IF W-FROM-DATE NOT = SPACES
+        MOVE W-FROM-DATE TO W-DATE-RAW
+        PERFORM VALIDATE-DATE
+        IF W-VALID NOT = "Y"
+            MOVE SPACES TO W-FROM-DATE
+        END-IF
+    END-IF.
+    IF W-TO-DATE NOT = SPACES
+        MOVE W-TO-DATE TO W-DATE-RAW
+        PERFORM VALIDATE-DATE
+        IF W-VALID NOT = "Y"
+            MOVE SPACES TO W-TO-DATE
+        END-IF
+    END-IF.
 
 READ-POST-BODY.
     DISPLAY "CONTENT_LENGTH" UPON ENVIRONMENT-NAME.
@@ -442,6 +585,8 @@ HANDLE-ACTION.
             IF W-LOGGED-IN = "Y"
                 PERFORM DO-LOGOUT
             END-IF
+        WHEN W-CMD(1:6) = "update" AND W-LOGGED-IN = "Y"
+            PERFORM DO-UPDATE
         WHEN W-CMD(1:3) = "add" AND W-LOGGED-IN = "Y"
             PERFORM DO-ADD
         WHEN W-CMD(1:3) = "del" AND W-LOGGED-IN = "Y"
@@ -462,15 +607,28 @@ DO-LOGIN.
         PERFORM GENERATE-TOKEN
         MOVE W-NEW-TOKEN TO W-STORED-TOKEN
         MOVE W-NEW-TOKEN TO W-COOKIE-TOKEN
+        COMPUTE W-SESSION-EXP = W-ABS-NOW + W-SESSION-TTL
+        MOVE W-SESSION-EXP TO W-EXP-DIGITS
         OPEN OUTPUT SESSION-FILE
-        MOVE W-NEW-TOKEN TO SESSION-REC
+        MOVE SPACES TO SESSION-REC
+        STRING W-NEW-TOKEN "|" W-EXP-DIGITS
+            DELIMITED BY SIZE INTO SESSION-REC
         WRITE SESSION-REC
         CLOSE SESSION-FILE
         MOVE "Y" TO W-LOGGED-IN
         MOVE "Y" TO W-SET-COOKIE
+        MOVE "LOGIN" TO W-AUDIT-ACTION
+        MOVE "autentificare reusita" TO W-AUDIT-DETAIL
+        PERFORM WRITE-AUDIT
     ELSE
         MOVE "User sau parola incorecte." TO W-ERROR-MSG
         MOVE "Y" TO W-HAS-ERROR
+        MOVE "LOGIN-FAIL" TO W-AUDIT-ACTION
+        MOVE SPACES TO W-AUDIT-DETAIL
+        STRING "user incercat: "
+               FUNCTION TRIM(W-LOGIN-USER)
+            DELIMITED BY SIZE INTO W-AUDIT-DETAIL
+        PERFORM WRITE-AUDIT
     END-IF.
 
 DO-LOGOUT.
@@ -482,6 +640,9 @@ DO-LOGOUT.
     MOVE SPACES TO W-COOKIE-TOKEN.
     MOVE SPACES TO W-STORED-TOKEN.
     MOVE "L" TO W-SET-COOKIE.
+    MOVE "LOGOUT" TO W-AUDIT-ACTION.
+    MOVE "sesiune inchisa" TO W-AUDIT-DETAIL.
+    PERFORM WRITE-AUDIT.
 
 DO-ADD.
     MOVE "date" TO W-KEY-LOOKUP.
@@ -560,7 +721,98 @@ WRITE-TRANSACTION.
         INVALID KEY
             MOVE "Eroare la scriere (ID duplicat)." TO W-ERROR-MSG
             MOVE "Y" TO W-HAS-ERROR
+        NOT INVALID KEY
+            MOVE "ADD" TO W-AUDIT-ACTION
+            MOVE SPACES TO W-AUDIT-DETAIL
+            STRING "id=" TRANS-ID " "
+                   FUNCTION TRIM(W-DESC-RAW)
+                DELIMITED BY SIZE INTO W-AUDIT-DETAIL
+            PERFORM WRITE-AUDIT
     END-WRITE.
+    CLOSE TRANSACTIONS-FILE.
+
+DO-UPDATE.
+    MOVE "id" TO W-KEY-LOOKUP.
+    PERFORM GET-FORM-VALUE.
+    MOVE W-VALUE-OUT(1:10) TO W-EDIT-ID-RAW.
+    PERFORM PARSE-EDIT-ID.
+    IF W-EDIT-ID = 0
+        MOVE "ID invalid pentru actualizare." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE W-EDIT-ID TO W-UPD-ID.
+    MOVE 0 TO W-EDIT-ID.
+
+    MOVE "date" TO W-KEY-LOOKUP.
+    PERFORM GET-FORM-VALUE.
+    MOVE W-VALUE-OUT(1:10) TO W-DATE-RAW.
+
+    MOVE "cat" TO W-KEY-LOOKUP.
+    PERFORM GET-FORM-VALUE.
+    MOVE W-VALUE-OUT(1:15) TO W-CAT-RAW.
+
+    MOVE "desc" TO W-KEY-LOOKUP.
+    PERFORM GET-FORM-VALUE.
+    MOVE W-VALUE-OUT(1:30) TO W-DESC-RAW.
+
+    MOVE "amount" TO W-KEY-LOOKUP.
+    PERFORM GET-FORM-VALUE.
+    MOVE W-VALUE-OUT(1:20) TO W-AMOUNT-RAW.
+
+    PERFORM VALIDATE-DATE.
+    IF W-VALID NOT = "Y"
+        MOVE "Data invalida (format YYYY-MM-DD)." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    PERFORM VALIDATE-CATEGORY.
+    IF W-VALID NOT = "Y"
+        MOVE "Categorie invalida." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    IF FUNCTION TRIM(W-DESC-RAW) = SPACES
+        MOVE "Descrierea este obligatorie." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    PERFORM VALIDATE-AMOUNT.
+    IF W-VALID NOT = "Y"
+        MOVE "Suma invalida (ex: 123.45 sau -50.00)." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+
+    OPEN I-O TRANSACTIONS-FILE.
+    IF FS-LEDGER NOT = "00"
+        MOVE "Eroare la deschiderea fisierului." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE W-UPD-ID TO TRANS-ID.
+    READ TRANSACTIONS-FILE
+        INVALID KEY
+            MOVE "Tranzactia nu exista." TO W-ERROR-MSG
+            MOVE "Y" TO W-HAS-ERROR
+        NOT INVALID KEY
+            MOVE W-DATE-RAW TO TRANS-DATE
+            MOVE W-CAT-RAW TO TRANS-CAT
+            MOVE W-DESC-RAW TO TRANS-DESC
+            MOVE W-AMOUNT-NUM TO TRANS-AMOUNT
+            REWRITE TRANS-RECORD
+                INVALID KEY
+                    MOVE "Eroare la actualizare." TO W-ERROR-MSG
+                    MOVE "Y" TO W-HAS-ERROR
+                NOT INVALID KEY
+                    MOVE "UPDATE" TO W-AUDIT-ACTION
+                    MOVE SPACES TO W-AUDIT-DETAIL
+                    STRING "id=" TRANS-ID " "
+                           FUNCTION TRIM(W-DESC-RAW)
+                        DELIMITED BY SIZE INTO W-AUDIT-DETAIL
+                    PERFORM WRITE-AUDIT
+            END-REWRITE
+    END-READ.
     CLOSE TRANSACTIONS-FILE.
 
 DO-DELETE.
@@ -589,10 +841,36 @@ DO-DELETE.
         READ TRANSACTIONS-FILE
             INVALID KEY CONTINUE
             NOT INVALID KEY
+                MOVE "DELETE" TO W-AUDIT-ACTION
+                MOVE SPACES TO W-AUDIT-DETAIL
+                STRING "id=" TRANS-ID " "
+                       FUNCTION TRIM(TRANS-DESC)
+                    DELIMITED BY SIZE INTO W-AUDIT-DETAIL
                 DELETE TRANSACTIONS-FILE RECORD
+                PERFORM WRITE-AUDIT
         END-READ
         CLOSE TRANSACTIONS-FILE
     END-IF.
+
+WRITE-AUDIT.
+    OPEN EXTEND AUDIT-FILE.
+    IF FS-AUDIT NOT = "00" AND FS-AUDIT NOT = "05"
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE FUNCTION CURRENT-DATE TO W-CURRENT-DATE-STR.
+    MOVE SPACES TO AUDIT-REC.
+    STRING W-CURRENT-DATE-STR(1:4) "-"
+           W-CURRENT-DATE-STR(5:2) "-"
+           W-CURRENT-DATE-STR(7:2) " "
+           W-CURRENT-DATE-STR(9:2) ":"
+           W-CURRENT-DATE-STR(11:2) ":"
+           W-CURRENT-DATE-STR(13:2)
+           " | " FUNCTION TRIM(W-REMOTE-ADDR)
+           " | " FUNCTION TRIM(W-AUDIT-ACTION)
+           " | " FUNCTION TRIM(W-AUDIT-DETAIL)
+        DELIMITED BY SIZE INTO AUDIT-REC.
+    WRITE AUDIT-REC.
+    CLOSE AUDIT-FILE.
 
 VALIDATE-AMOUNT.
     MOVE "Y" TO W-VALID.
@@ -600,11 +878,14 @@ VALIDATE-AMOUNT.
         MOVE "N" TO W-VALID
         EXIT PARAGRAPH
     END-IF.
+    MOVE 0 TO W-J.
     PERFORM VARYING W-I FROM 1 BY 1 UNTIL W-I > 20
         IF W-AMOUNT-RAW(W-I:1) NOT = SPACE
             EVALUATE W-AMOUNT-RAW(W-I:1)
                 WHEN "0" THRU "9" CONTINUE
-                WHEN "." CONTINUE
+                WHEN "."
+                    ADD 1 TO W-J
+                    IF W-J > 1 MOVE "N" TO W-VALID END-IF
                 WHEN "-"
                     IF W-I > 1 MOVE "N" TO W-VALID END-IF
                 WHEN "+"
@@ -638,6 +919,14 @@ VALIDATE-DATE.
             END-EVALUATE
         END-IF
     END-PERFORM.
+    IF W-VALID = "Y"
+        IF W-DATE-RAW(6:2) < "01" OR W-DATE-RAW(6:2) > "12"
+            MOVE "N" TO W-VALID
+        END-IF
+        IF W-DATE-RAW(9:2) < "01" OR W-DATE-RAW(9:2) > "31"
+            MOVE "N" TO W-VALID
+        END-IF
+    END-IF.
 
 VALIDATE-CATEGORY.
     MOVE "N" TO W-VALID.
@@ -655,7 +944,7 @@ DISPLAY-PAGE.
     IF W-SET-COOKIE = "Y"
         DISPLAY "Set-Cookie: session=" W-NEW-TOKEN
                 "; Path=/; HttpOnly; Secure; SameSite=Strict"
-                "; Max-Age=3600"
+                "; Max-Age=28800"
     END-IF.
     IF W-SET-COOKIE = "L"
         DISPLAY "Set-Cookie: session=; Path=/; HttpOnly; Secure; "
@@ -663,7 +952,9 @@ DISPLAY-PAGE.
     END-IF.
     DISPLAY " ".
     DISPLAY "<!DOCTYPE html><html><head><meta charset='utf-8'>".
-    DISPLAY "<title>Ledger Pro v4.0</title>".
+    DISPLAY "<meta name='viewport' content='width=device-width, "
+            "initial-scale=1'>".
+    DISPLAY "<title>Ledger of Ages</title>".
     DISPLAY "<style>body{font-family:sans-serif;"
             "background:#f8fafc;padding:2rem;}".
     DISPLAY ".card{background:white;border-radius:12px;padding:1.5rem;"
@@ -673,12 +964,23 @@ DISPLAY-PAGE.
     DISPLAY "th{text-align:left;background:#f1f5f9;padding:8px;}".
     DISPLAY "td{padding:8px;border-bottom:1px solid #eee;}".
     DISPLAY ".btn{background:#1e293b;color:white;border:none;"
-            "padding:8px 16px;border-radius:6px;cursor:pointer;}".
+            "padding:8px 16px;border-radius:6px;cursor:pointer;"
+            "display:inline-block;font-size:0.9rem;}".
     DISPLAY ".btn-del{background:#ef4444;}".
+    DISPLAY ".btn-edit{background:#0ea5e9;text-decoration:none;"
+            "padding:6px 12px;}".
     DISPLAY ".err{background:#fee2e2;color:#991b1b;padding:12px;"
             "border-radius:8px;margin:1rem auto;max-width:1000px;}".
     DISPLAY "input,select{padding:6px;border:1px solid #cbd5e1;"
             "border-radius:4px;}".
+    DISPLAY ".pos{color:#16a34a;}.neg{color:#dc2626;}".
+    DISPLAY "nav a{margin-right:14px;color:#1e293b;font-weight:600;"
+            "text-decoration:none;}nav a:hover{"
+            "text-decoration:underline;}".
+    DISPLAY ".barwrap{background:#f1f5f9;border-radius:4px;"
+            "overflow:hidden;height:8px;margin:3px 0;}".
+    DISPLAY ".bar-in{background:#16a34a;height:8px;}".
+    DISPLAY ".bar-ex{background:#dc2626;height:8px;}".
     DISPLAY "</style></head><body>".
 
     IF W-HAS-ERROR = "Y"
@@ -691,27 +993,63 @@ DISPLAY-PAGE.
     IF W-LOGGED-IN = "N"
         PERFORM DISPLAY-LOGIN
     ELSE
-        MOVE W-CFG-USER TO W-ESC-IN
-        PERFORM HTML-ESCAPE
-        DISPLAY "<div class='card'><h1>Ledger of Ages</h1>"
-                "<p>Logat ca: <b>" FUNCTION TRIM(W-ESC-OUT) "</b> "
-                "<form method='POST' style='display:inline'>"
-                "<input type='hidden' name='cmd' value='logout'>"
-                "<button type='submit' class='btn'>Logout</button>"
-                "</form></p></div>"
-        PERFORM DISPLAY-TOOLBAR
-        MOVE 0 TO W-TOTAL-BALANCE
-        MOVE "N" TO W-EOF
-        PERFORM INITIALIZE-SUMMARY
-        PERFORM OPEN-LEDGER-FILE
-        IF FS-LEDGER = "00"
-            PERFORM DISPLAY-TABLE
-            PERFORM CLOSE-LEDGER-FILE
-            PERFORM DISPLAY-SUMMARY
-        END-IF
-        PERFORM DISPLAY-ADD-FORM
+        PERFORM DISPLAY-HEADER
+        EVALUATE FUNCTION TRIM(W-VIEW)
+            WHEN "REPORT"
+                PERFORM DISPLAY-REPORT-VIEW
+            WHEN "AUDIT"
+                PERFORM DISPLAY-AUDIT-VIEW
+            WHEN OTHER
+                PERFORM DISPLAY-LEDGER-VIEW
+        END-EVALUATE
     END-IF.
     DISPLAY "</body></html>".
+
+DISPLAY-HEADER.
+    MOVE W-CFG-USER TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<div class='card'><div style='display:flex;"
+            "justify-content:space-between;align-items:center;"
+            "flex-wrap:wrap;gap:8px;'>"
+            "<h1 style='margin:0'>Ledger of Ages</h1>"
+            "<nav><a href='?'>Tranzactii</a>"
+            "<a href='?view=REPORT'>Raport lunar</a>"
+            "<a href='?view=AUDIT'>Audit</a></nav>"
+            "<span>Logat ca <b>" FUNCTION TRIM(W-ESC-OUT) "</b> "
+            "<form method='POST' style='display:inline'>"
+            "<input type='hidden' name='cmd' value='logout'>"
+            "<button type='submit' class='btn'>Logout</button>"
+            "</form></span></div></div>".
+
+DISPLAY-LEDGER-VIEW.
+    PERFORM INITIALIZE-SUMMARY.
+    PERFORM DISPLAY-TOOLBAR.
+    MOVE 0 TO W-TOTAL-BALANCE.
+    MOVE 0 TO W-ROW-COUNT.
+    MOVE "N" TO W-EOF.
+    PERFORM OPEN-LEDGER-FILE.
+    IF FS-LEDGER = "00"
+        PERFORM LOAD-EDIT-RECORD
+        PERFORM DISPLAY-TABLE
+        PERFORM CLOSE-LEDGER-FILE
+        PERFORM DISPLAY-SUMMARY
+    END-IF.
+    PERFORM DISPLAY-ADD-FORM.
+
+LOAD-EDIT-RECORD.
+    MOVE "N" TO W-EDIT-MODE.
+    IF W-EDIT-ID > 0
+        MOVE W-EDIT-ID TO TRANS-ID
+        READ TRANSACTIONS-FILE
+            INVALID KEY CONTINUE
+            NOT INVALID KEY
+                MOVE "Y" TO W-EDIT-MODE
+                MOVE TRANS-DATE TO W-EDIT-DATE
+                MOVE TRANS-CAT TO W-EDIT-CAT
+                MOVE TRANS-DESC TO W-EDIT-DESC
+                MOVE TRANS-AMOUNT TO W-EDIT-AMT-STR
+        END-READ
+    END-IF.
 
 DISPLAY-LOGIN.
     DISPLAY "<div class='card' style='max-width:400px;margin-top:80px;'>"
@@ -728,41 +1066,94 @@ DISPLAY-LOGIN.
             "</form></div>".
 
 DISPLAY-TOOLBAR.
-    DISPLAY "<div class='card'><form method='GET'>"
-            "Filtru: <select name='filter'>"
-            "<option value='ALL'>Toate</option>"
-            "<option value='Venituri'>Venituri</option>"
-            "<option value='Locuinta'>Locuinta</option>"
-            "<option value='Mancare'>Mancare</option>"
-            "<option value='Hobby'>Hobby</option>"
-            "<option value='Utilitati'>Utilitati</option>"
-            "</select> "
-            "Sort: <select name='sort'>"
-            "<option value='ID'>ID</option>"
-            "<option value='DATE'>Data</option>"
-            "</select> "
-            "<button type='submit' class='btn'>Aplica</button>"
-            "</form></div>".
+    DISPLAY "<div class='card'><form method='GET' "
+            "style='display:flex;gap:10px;flex-wrap:wrap;"
+            "align-items:center;'>".
+    DISPLAY "Filtru: <select name='filter'>".
+    IF W-FILTER-CAT = "ALL"
+        DISPLAY "<option value='ALL' selected>Toate</option>"
+    ELSE
+        DISPLAY "<option value='ALL'>Toate</option>"
+    END-IF.
+    MOVE W-FILTER-CAT TO W-OPT-CURRENT.
+    PERFORM DISPLAY-CAT-OPTIONS.
+    DISPLAY "</select>".
+    DISPLAY "Sort: <select name='sort'>".
+    IF W-SORT-BY(1:4) = "DATE"
+        DISPLAY "<option value='ID'>ID</option>"
+                "<option value='DATE' selected>Data</option>"
+    ELSE
+        DISPLAY "<option value='ID' selected>ID</option>"
+                "<option value='DATE'>Data</option>"
+    END-IF.
+    DISPLAY "</select>".
+    DISPLAY "De la: <input type='date' name='from' value='"
+            FUNCTION TRIM(W-FROM-DATE) "'>".
+    DISPLAY "Pana la: <input type='date' name='to' value='"
+            FUNCTION TRIM(W-TO-DATE) "'>".
+    DISPLAY "<button type='submit' class='btn'>Aplica</button>".
+    DISPLAY "<button type='submit' class='btn' name='export' "
+            "value='csv'>Export CSV</button>".
+    DISPLAY "</form></div>".
+
+DISPLAY-CAT-OPTIONS.
+    PERFORM VARYING CAT-IDX FROM 1 BY 1 UNTIL CAT-IDX > 5
+        IF CAT-NAME(CAT-IDX) = W-OPT-CURRENT
+            DISPLAY "<option value='"
+                    FUNCTION TRIM(CAT-NAME(CAT-IDX)) "' selected>"
+                    FUNCTION TRIM(CAT-NAME(CAT-IDX)) "</option>"
+        ELSE
+            DISPLAY "<option value='"
+                    FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'>"
+                    FUNCTION TRIM(CAT-NAME(CAT-IDX)) "</option>"
+        END-IF
+    END-PERFORM.
 
 DISPLAY-ADD-FORM.
+    IF W-EDIT-MODE = "Y"
+        PERFORM DISPLAY-EDIT-FORM
+        EXIT PARAGRAPH
+    END-IF.
     DISPLAY "<div class='card'><h2>Adauga tranzactie</h2>"
             "<form method='POST'>"
             "<input type='hidden' name='cmd' value='add'>"
             "Data: <input type='date' name='date' value='"
             W-TODAY-STR "' required> "
-            "Cat: <select name='cat'>"
-            "<option value='Venituri'>Venituri</option>"
-            "<option value='Locuinta'>Locuinta</option>"
-            "<option value='Mancare'>Mancare</option>"
-            "<option value='Hobby'>Hobby</option>"
-            "<option value='Utilitati'>Utilitati</option>"
-            "</select> "
+            "Cat: <select name='cat'>".
+    MOVE SPACES TO W-OPT-CURRENT.
+    PERFORM DISPLAY-CAT-OPTIONS.
+    DISPLAY "</select> "
             "Desc: <input type='text' name='desc' required "
             "maxlength='30'> "
             "Suma: <input type='number' name='amount' "
             "step='0.01' required min='-9999999.99' "
             "max='9999999.99'> "
             "<button type='submit' class='btn'>Salveaza</button>"
+            "</form></div>".
+
+DISPLAY-EDIT-FORM.
+    MOVE W-EDIT-DESC TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<div class='card'><h2>Editeaza tranzactia #"
+            W-EDIT-ID "</h2>"
+            "<form method='POST'>"
+            "<input type='hidden' name='cmd' value='update'>"
+            "<input type='hidden' name='id' value='" W-EDIT-ID "'>"
+            "Data: <input type='date' name='date' value='"
+            W-EDIT-DATE "' required> "
+            "Cat: <select name='cat'>".
+    MOVE W-EDIT-CAT TO W-OPT-CURRENT.
+    PERFORM DISPLAY-CAT-OPTIONS.
+    DISPLAY "</select> "
+            "Desc: <input type='text' name='desc' required "
+            "maxlength='30' value='" FUNCTION TRIM(W-ESC-OUT) "'> "
+            "Suma: <input type='number' name='amount' "
+            "step='0.01' required min='-9999999.99' "
+            "max='9999999.99' value='"
+            FUNCTION TRIM(W-EDIT-AMT-STR) "'> "
+            "<button type='submit' class='btn'>Actualizeaza</button> "
+            "<a href='?' class='btn' style='background:#64748b;"
+            "text-decoration:none'>Anuleaza</a>"
             "</form></div>".
 
 INITIALIZE-SUMMARY.
@@ -794,20 +1185,35 @@ DISPLAY-TABLE.
         READ TRANSACTIONS-FILE NEXT
             AT END MOVE "Y" TO W-EOF
             NOT AT END
-                IF (W-FILTER-CAT = "ALL")
-                   OR (W-FILTER-CAT = TRANS-CAT)
+                PERFORM CHECK-ROW-MATCH
+                IF W-ROW-MATCH = "Y"
                     PERFORM RENDER-ROW
+                    ADD 1 TO W-ROW-COUNT
                     ADD TRANS-AMOUNT TO W-TOTAL-BALANCE
                     PERFORM UPDATE-CAT-TOTAL
                 END-IF
         END-READ
     END-PERFORM.
     MOVE W-TOTAL-BALANCE TO W-DISPLAY-TOTAL.
+    MOVE W-ROW-COUNT TO W-DISPLAY-COUNT.
     DISPLAY "</tbody><tfoot><tr>"
-            "<td colspan='4'><b>Total</b></td>"
+            "<td colspan='4'><b>Total ("
+            FUNCTION TRIM(W-DISPLAY-COUNT) " tranzactii)</b></td>"
             "<td style='text-align:right'><b>"
             W-DISPLAY-TOTAL "</b></td><td></td></tr></tfoot>"
             "</table></div>".
+
+CHECK-ROW-MATCH.
+    MOVE "Y" TO W-ROW-MATCH.
+    IF W-FILTER-CAT NOT = "ALL" AND W-FILTER-CAT NOT = TRANS-CAT
+        MOVE "N" TO W-ROW-MATCH
+    END-IF.
+    IF W-FROM-DATE NOT = SPACES AND TRANS-DATE < W-FROM-DATE
+        MOVE "N" TO W-ROW-MATCH
+    END-IF.
+    IF W-TO-DATE NOT = SPACES AND TRANS-DATE > W-TO-DATE
+        MOVE "N" TO W-ROW-MATCH
+    END-IF.
 
 RENDER-ROW.
     DISPLAY "<tr><td>#" TRANS-ID "</td>".
@@ -821,9 +1227,17 @@ RENDER-ROW.
     PERFORM HTML-ESCAPE.
     DISPLAY "<td>" FUNCTION TRIM(W-ESC-OUT) "</td>".
     MOVE TRANS-AMOUNT TO W-DISPLAY-AMOUNT.
-    DISPLAY "<td style='text-align:right'>"
-            W-DISPLAY-AMOUNT "</td>".
-    DISPLAY "<td><form method='POST' style='margin:0'>"
+    IF TRANS-AMOUNT < 0
+        DISPLAY "<td class='neg' style='text-align:right'>"
+                W-DISPLAY-AMOUNT "</td>"
+    ELSE
+        DISPLAY "<td class='pos' style='text-align:right'>"
+                W-DISPLAY-AMOUNT "</td>"
+    END-IF.
+    DISPLAY "<td style='white-space:nowrap'>"
+            "<a class='btn btn-edit' href='?edit=" TRANS-ID
+            "'>Edit</a> "
+            "<form method='POST' style='margin:0;display:inline'>"
             "<input type='hidden' name='cmd' value='del'>"
             "<input type='hidden' name='id' value='" TRANS-ID "'>"
             "<button type='submit' class='btn btn-del' "
@@ -842,14 +1256,243 @@ DISPLAY-SUMMARY.
     DISPLAY "<div style='display:flex;gap:1rem;max-width:1000px;"
             "margin:1rem auto;'>".
     PERFORM VARYING CAT-IDX FROM 1 BY 1 UNTIL CAT-IDX > 5
-        MOVE CAT-TOTAL(CAT-IDX) TO W-DISPLAY-AMOUNT
+        MOVE CAT-TOTAL(CAT-IDX) TO W-DISPLAY-TOTAL
         MOVE CAT-NAME(CAT-IDX) TO W-ESC-IN
         PERFORM HTML-ESCAPE
         DISPLAY "<div class='card' style='flex:1;text-align:center;"
                 "margin:0;'><div>" FUNCTION TRIM(W-ESC-OUT) "</div>"
-                "<strong>" W-DISPLAY-AMOUNT "</strong></div>"
+                "<strong>" FUNCTION TRIM(W-DISPLAY-TOTAL)
+                "</strong></div>"
     END-PERFORM.
     DISPLAY "</div>".
+
+EXPORT-CSV.
+    DISPLAY "Content-Type: text/csv; charset=utf-8".
+    DISPLAY "Content-Disposition: attachment; "
+            "filename=ledger-export.csv".
+    DISPLAY " ".
+    DISPLAY "id,data,categorie,descriere,suma".
+    PERFORM OPEN-LEDGER-FILE.
+    IF FS-LEDGER = "00"
+        MOVE "N" TO W-EOF
+        MOVE 0 TO TRANS-ID
+        START TRANSACTIONS-FILE KEY IS GREATER THAN TRANS-ID
+            INVALID KEY MOVE "Y" TO W-EOF
+        END-START
+        PERFORM UNTIL W-EOF = "Y"
+            READ TRANSACTIONS-FILE NEXT
+                AT END MOVE "Y" TO W-EOF
+                NOT AT END
+                    PERFORM CHECK-ROW-MATCH
+                    IF W-ROW-MATCH = "Y"
+                        PERFORM RENDER-CSV-ROW
+                    END-IF
+            END-READ
+        END-PERFORM
+        PERFORM CLOSE-LEDGER-FILE
+    END-IF.
+    MOVE "EXPORT" TO W-AUDIT-ACTION.
+    MOVE "export CSV" TO W-AUDIT-DETAIL.
+    PERFORM WRITE-AUDIT.
+
+RENDER-CSV-ROW.
+    MOVE TRANS-DESC TO W-CSV-IN.
+    PERFORM CSV-ESCAPE.
+    MOVE TRANS-AMOUNT TO W-CSV-AMT.
+    DISPLAY TRANS-ID "," TRANS-DATE ","
+            FUNCTION TRIM(TRANS-CAT) ',"'
+            FUNCTION TRIM(W-CSV-OUT) '",'
+            FUNCTION TRIM(W-CSV-AMT).
+
+CSV-ESCAPE.
+    MOVE SPACES TO W-CSV-OUT.
+    MOVE 0 TO W-CSV-OUT-LEN.
+    MOVE 0 TO W-CSV-IN-LEN.
+    PERFORM VARYING W-CSV-I FROM 60 BY -1
+            UNTIL W-CSV-I = 0 OR W-CSV-IN(W-CSV-I:1) NOT = SPACE
+        CONTINUE
+    END-PERFORM.
+    MOVE W-CSV-I TO W-CSV-IN-LEN.
+    PERFORM VARYING W-CSV-I FROM 1 BY 1
+            UNTIL W-CSV-I > W-CSV-IN-LEN
+        IF W-CSV-IN(W-CSV-I:1) = '"'
+            ADD 1 TO W-CSV-OUT-LEN
+            MOVE '"' TO W-CSV-OUT(W-CSV-OUT-LEN:1)
+        END-IF
+        ADD 1 TO W-CSV-OUT-LEN
+        MOVE W-CSV-IN(W-CSV-I:1) TO W-CSV-OUT(W-CSV-OUT-LEN:1)
+    END-PERFORM.
+
+DISPLAY-REPORT-VIEW.
+    MOVE 0 TO MONTH-COUNT.
+    MOVE 0 TO W-MAX-FLOW.
+    PERFORM OPEN-LEDGER-FILE.
+    IF FS-LEDGER = "00"
+        PERFORM BUILD-REPORT
+        PERFORM CLOSE-LEDGER-FILE
+    END-IF.
+    DISPLAY "<div class='card'><h2>Raport lunar</h2>".
+    IF MONTH-COUNT = 0
+        DISPLAY "<p>Nu exista tranzactii.</p>"
+    ELSE
+        DISPLAY "<table><thead><tr><th>Luna</th>"
+                "<th style='text-align:right'>Venituri</th>"
+                "<th style='text-align:right'>Cheltuieli</th>"
+                "<th style='text-align:right'>Net</th>"
+                "<th style='width:35%'>Grafic</th>"
+                "</tr></thead><tbody>"
+        PERFORM VARYING W-M-IDX FROM 1 BY 1
+                UNTIL W-M-IDX > MONTH-COUNT
+            PERFORM RENDER-REPORT-ROW
+        END-PERFORM
+        DISPLAY "</tbody></table>"
+    END-IF.
+    DISPLAY "</div>".
+
+BUILD-REPORT.
+    MOVE "N" TO W-EOF.
+    MOVE LOW-VALUES TO TRANS-DATE.
+    START TRANSACTIONS-FILE KEY IS GREATER THAN TRANS-DATE
+        INVALID KEY MOVE "Y" TO W-EOF
+    END-START.
+    PERFORM UNTIL W-EOF = "Y"
+        READ TRANSACTIONS-FILE NEXT
+            AT END MOVE "Y" TO W-EOF
+            NOT AT END PERFORM ACCUMULATE-MONTH
+        END-READ
+    END-PERFORM.
+    PERFORM VARYING W-M-IDX FROM 1 BY 1 UNTIL W-M-IDX > MONTH-COUNT
+        IF MONTH-INCOME(W-M-IDX) > W-MAX-FLOW
+            MOVE MONTH-INCOME(W-M-IDX) TO W-MAX-FLOW
+        END-IF
+        COMPUTE W-ABS-EXP = MONTH-EXPENSE(W-M-IDX) * -1
+        IF W-ABS-EXP > W-MAX-FLOW
+            MOVE W-ABS-EXP TO W-MAX-FLOW
+        END-IF
+    END-PERFORM.
+
+ACCUMULATE-MONTH.
+    IF MONTH-COUNT = 0
+        PERFORM START-NEW-MONTH
+    ELSE
+        IF TRANS-DATE(1:7) NOT = MONTH-KEY(MONTH-COUNT)
+            PERFORM START-NEW-MONTH
+        END-IF
+    END-IF.
+    IF MONTH-COUNT = 0
+        EXIT PARAGRAPH
+    END-IF.
+    IF TRANS-AMOUNT >= 0
+        ADD TRANS-AMOUNT TO MONTH-INCOME(MONTH-COUNT)
+    ELSE
+        ADD TRANS-AMOUNT TO MONTH-EXPENSE(MONTH-COUNT)
+    END-IF.
+
+START-NEW-MONTH.
+    IF MONTH-COUNT < 120
+        ADD 1 TO MONTH-COUNT
+        MOVE TRANS-DATE(1:7) TO MONTH-KEY(MONTH-COUNT)
+        MOVE 0 TO MONTH-INCOME(MONTH-COUNT)
+        MOVE 0 TO MONTH-EXPENSE(MONTH-COUNT)
+    END-IF.
+
+RENDER-REPORT-ROW.
+    MOVE MONTH-KEY(W-M-IDX) TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<tr><td><b>" FUNCTION TRIM(W-ESC-OUT) "</b></td>".
+    MOVE MONTH-INCOME(W-M-IDX) TO W-DISPLAY-TOTAL.
+    DISPLAY "<td class='pos' style='text-align:right'>"
+            W-DISPLAY-TOTAL "</td>".
+    MOVE MONTH-EXPENSE(W-M-IDX) TO W-DISPLAY-TOTAL.
+    DISPLAY "<td class='neg' style='text-align:right'>"
+            W-DISPLAY-TOTAL "</td>".
+    COMPUTE W-NET-AMT = MONTH-INCOME(W-M-IDX)
+                      + MONTH-EXPENSE(W-M-IDX).
+    MOVE W-NET-AMT TO W-DISPLAY-TOTAL.
+    IF W-NET-AMT < 0
+        DISPLAY "<td class='neg' style='text-align:right'><b>"
+                W-DISPLAY-TOTAL "</b></td>"
+    ELSE
+        DISPLAY "<td class='pos' style='text-align:right'><b>"
+                W-DISPLAY-TOTAL "</b></td>"
+    END-IF.
+    DISPLAY "<td>".
+    IF W-MAX-FLOW > 0
+        COMPUTE W-BAR-PCT ROUNDED =
+            MONTH-INCOME(W-M-IDX) * 100 / W-MAX-FLOW
+        MOVE W-BAR-PCT TO W-BAR-PCT-D
+        DISPLAY "<div class='barwrap'><div class='bar-in' "
+                "style='width:" FUNCTION TRIM(W-BAR-PCT-D)
+                "%'></div></div>"
+        COMPUTE W-ABS-EXP = MONTH-EXPENSE(W-M-IDX) * -1
+        COMPUTE W-BAR-PCT ROUNDED = W-ABS-EXP * 100 / W-MAX-FLOW
+        MOVE W-BAR-PCT TO W-BAR-PCT-D
+        DISPLAY "<div class='barwrap'><div class='bar-ex' "
+                "style='width:" FUNCTION TRIM(W-BAR-PCT-D)
+                "%'></div></div>"
+    END-IF.
+    DISPLAY "</td></tr>".
+
+DISPLAY-AUDIT-VIEW.
+    MOVE 0 TO W-AR-TOTAL.
+    OPEN INPUT AUDIT-FILE.
+    IF FS-AUDIT = "00"
+        MOVE "N" TO W-EOF
+        PERFORM UNTIL W-EOF = "Y"
+            READ AUDIT-FILE
+                AT END MOVE "Y" TO W-EOF
+                NOT AT END
+                    ADD 1 TO W-AR-TOTAL
+                    COMPUTE W-AR-IDX =
+                        FUNCTION MOD(W-AR-TOTAL - 1, 30) + 1
+                    MOVE AUDIT-REC TO AR-LINE(W-AR-IDX)
+            END-READ
+        END-PERFORM
+        CLOSE AUDIT-FILE
+    END-IF.
+    DISPLAY "<div class='card'><h2>Jurnal de audit</h2>"
+            "<p>Ultimele 30 de actiuni, cele mai recente primele."
+            "</p>".
+    IF W-AR-TOTAL = 0
+        DISPLAY "<p>Nicio intrare inca.</p>"
+    ELSE
+        DISPLAY "<table><thead><tr><th>Timp</th><th>IP</th>"
+                "<th>Actiune</th><th>Detalii</th>"
+                "</tr></thead><tbody>"
+        IF W-AR-TOTAL > 30
+            COMPUTE W-AR-FROM = W-AR-TOTAL - 29
+        ELSE
+            MOVE 1 TO W-AR-FROM
+        END-IF
+        PERFORM VARYING W-AR-K FROM W-AR-TOTAL BY -1
+                UNTIL W-AR-K < W-AR-FROM
+            COMPUTE W-AR-IDX = FUNCTION MOD(W-AR-K - 1, 30) + 1
+            PERFORM RENDER-AUDIT-ROW
+        END-PERFORM
+        DISPLAY "</tbody></table>"
+    END-IF.
+    DISPLAY "</div>".
+
+RENDER-AUDIT-ROW.
+    MOVE SPACES TO W-AUD-TS W-AUD-IP W-AUD-ACT W-AUD-DET.
+    UNSTRING AR-LINE(W-AR-IDX) DELIMITED BY " | "
+        INTO W-AUD-TS, W-AUD-IP, W-AUD-ACT, W-AUD-DET
+    END-UNSTRING.
+    DISPLAY "<tr>".
+    MOVE W-AUD-TS TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<td style='white-space:nowrap'>"
+            FUNCTION TRIM(W-ESC-OUT) "</td>".
+    MOVE W-AUD-IP TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<td>" FUNCTION TRIM(W-ESC-OUT) "</td>".
+    MOVE W-AUD-ACT TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<td><b>" FUNCTION TRIM(W-ESC-OUT) "</b></td>".
+    MOVE W-AUD-DET TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<td>" FUNCTION TRIM(W-ESC-OUT) "</td>".
+    DISPLAY "</tr>".
 
 OPEN-LEDGER-FILE.
     OPEN I-O TRANSACTIONS-FILE.
