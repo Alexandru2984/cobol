@@ -1,118 +1,169 @@
-"""WSGI wrapper: expune binarul COBOL CGI (ledger.cgi) printr-un app Flask.
-
-Fiecare request este tradus in variabile de mediu CGI si trimis catre
-binarul compilat cu GnuCOBOL. Raspunsul (headere + body) este parsat
-si returnat clientului. Configurare prin variabile de mediu:
-
-    LEDGER_BIN  - calea catre binarul CGI (default: ledger.cgi de langa app.py)
-    LEDGER_DIR  - working directory pentru binar; aici sta data/ (default: dirul app.py)
-"""
-
-from flask import Flask, request, Response, jsonify
+"""Flask/WSGI bridge for the COBOL ledger, with a strict HTTP trust boundary."""
 import logging
 import os
+from pathlib import Path
+import re
+import secrets
 import subprocess
+from urllib.parse import urlencode
 
+from flask import Flask, Response, abort, g, jsonify, request
+from werkzeug.security import check_password_hash
+
+from security import (FORM_LIMITS, QUERY_LIMITS, SESSION_COOKIE, client_ip,
+                      csrf_token, ledger_lock, parse_fields, session_token,
+                      verify_csrf)
+
+BASE_DIR = Path(__file__).resolve().parent
+BIN_PATH = os.environ.get("LEDGER_BIN", str(BASE_DIR / "ledger.cgi"))
+WORK_DIR = os.environ.get("LEDGER_DIR", str(BASE_DIR))
+SUBPROCESS_TIMEOUT = 20
+MAX_OUTPUT = 16 * 1024 * 1024
 app = Flask(__name__)
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-BIN_PATH = os.environ.get("LEDGER_BIN", os.path.join(BASE_DIR, "ledger.cgi"))
-WORK_DIR = os.environ.get("LEDGER_DIR", BASE_DIR)
-SUBPROCESS_TIMEOUT = 20  # secunde; sub timeout-ul gunicorn (30)
-
+app.config.update(
+    MAX_CONTENT_LENGTH=4096,
+    SECRET_KEY=os.environ.get("LEDGER_CSRF_SECRET", ""),
+    TRUSTED_HOSTS=os.environ.get(
+        "LEDGER_TRUSTED_HOSTS", "cobol.micutu.com,localhost,127.0.0.1").split(","),
+)
 logger = logging.getLogger("ledger")
 logging.basicConfig(level=logging.INFO)
 
 
+def configured():
+    password_hash = os.environ.get("LEDGER_PASSWORD_HASH", "")
+    if password_hash:
+        credentials = bool(re.fullmatch(
+            r"scrypt:131072:8:1\$[A-Za-z0-9]+\$[0-9a-f]{128}", password_hash))
+    else:
+        legacy = os.environ.get("LEDGER_PASS_HASH", "")
+        credentials = bool(re.fullmatch(r"[0-9a-fA-F]{64}", legacy)) if legacy else bool(
+            os.environ.get("LEDGER_PASS"))
+    return credentials and len(app.config["SECRET_KEY"]) >= 32
+
+
+@app.before_request
+def identify_request():
+    g.request_id = secrets.token_hex(8)
+
+
+@app.after_request
+def security_headers(response):
+    response.headers.update({
+        "Cache-Control": "no-store, private", "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
+        "Referrer-Policy": "same-origin", "X-Robots-Tag": "noindex, nofollow",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+        "Content-Security-Policy": "default-src 'self'; base-uri 'none'; "
+            "object-src 'none'; frame-ancestors 'none'; form-action 'self'; "
+            "script-src 'self' https://analytics.micutu.com https://static.cloudflareinsights.com; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; "
+            "connect-src 'self' https://analytics.micutu.com https://cloudflareinsights.com",
+        "X-Request-ID": getattr(g, "request_id", ""),
+    })
+    response.vary.add("Cookie")
+    return response
+
+
 @app.route("/health")
 def health():
-    """Endpoint pentru monitoring: verifica binarul si directorul de date."""
     checks = {
         "binary": os.access(BIN_PATH, os.X_OK),
         "data_dir": os.path.isdir(os.path.join(WORK_DIR, "data")),
+        "configuration": configured(),
     }
     ok = all(checks.values())
-    return jsonify(status="ok" if ok else "degraded", checks=checks), (
-        200 if ok else 503
-    )
+    return jsonify(status="ok" if ok else "degraded", checks=checks), 200 if ok else 503
 
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    env = os.environ.copy()
-    env["REQUEST_METHOD"] = request.method
-    env["QUERY_STRING"] = request.query_string.decode("utf-8")
-    env["HTTP_COOKIE"] = request.headers.get("Cookie", "")
-    # IP-ul real al clientului, setat de nginx; folosit in jurnalul de audit.
-    env["REMOTE_ADDR"] = request.headers.get(
-        "X-Real-IP", request.remote_addr or "-"
-    )
-
-    input_data = None
+    if not configured():
+        abort(503, "Configuratia de securitate este incompleta.")
+    if len(request.query_string) > 1024:
+        abort(414)
+    query = parse_fields(request.query_string, QUERY_LIMITS)
+    session = session_token()
+    form = {}
     if request.method == "POST":
-        input_data = request.get_data()
-        env["CONTENT_LENGTH"] = str(len(input_data))
-    else:
-        env["CONTENT_LENGTH"] = "0"
-
+        if request.mimetype != "application/x-www-form-urlencoded":
+            abort(415)
+        form = parse_fields(request.get_data(), FORM_LIMITS)
+        verify_csrf(app.config["SECRET_KEY"], session, form.pop("csrf_token", ""),
+                    os.environ.get("LEDGER_PUBLIC_ORIGIN", "https://cobol.micutu.com"))
+        if form.get("cmd") not in {"login", "logout", "add", "update", "del"}:
+            abort(400, "Comanda invalida.")
+    # Never forward the host process environment or unverified client cookies.
+    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TZ": "UTC"}
+    for key in ("LEDGER_USER", "LEDGER_PASS", "LEDGER_PASS_HASH", "LEDGER_SESSION_TTL"):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    env.update({
+        "REQUEST_METHOD": request.method, "QUERY_STRING": urlencode(query),
+        "HTTP_COOKIE": f"session={session}" if session else "",
+        "REMOTE_ADDR": client_ip(os.environ.get(
+            "LEDGER_TRUSTED_PROXIES", "127.0.0.1/32,::1/128").split(",")),
+        "LEDGER_CSRF_TOKEN": csrf_token(app.config["SECRET_KEY"], session),
+        "LEDGER_AUTH_MODE": "legacy", "LEDGER_AUTH_VERIFIED": "N",
+    })
+    input_data = urlencode(form).encode("ascii") if request.method == "POST" else None
+    env["CONTENT_LENGTH"] = str(len(input_data or b""))
     try:
-        process = subprocess.Popen(
-            [BIN_PATH],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd=WORK_DIR,
-        )
-        stdout, stderr = process.communicate(
-            input=input_data, timeout=SUBPROCESS_TIMEOUT
-        )
-    except subprocess.TimeoutExpired:
-        process.kill()
-        logger.error("ledger.cgi timeout after %ss", SUBPROCESS_TIMEOUT)
-        return "Eroare: backend-ul COBOL nu a raspuns la timp.", 504
-    except OSError as e:
-        logger.error("ledger.cgi could not be executed: %s", e)
-        return "Eroare: backend-ul COBOL nu este disponibil.", 502
-
-    if stderr:
-        logger.warning("ledger.cgi stderr: %s", stderr.decode(errors="ignore").strip())
-    if process.returncode != 0:
-        logger.error("ledger.cgi exit code %s", process.returncode)
-        return "Eroare: backend-ul COBOL a esuat.", 502
-
-    raw_output = stdout.decode(errors="ignore")
-
-    headers = []
-    body = raw_output
-    separator = None
-    for sep in ("\r\n\r\n", "\n\n", "\n \n"):
-        if sep in raw_output:
-            separator = sep
-            break
-    if separator:
-        head_part, body = raw_output.split(separator, 1)
-        for line in head_part.replace("\r\n", "\n").split("\n"):
-            if ":" in line:
-                k, v = line.split(":", 1)
-                headers.append((k.strip(), v.strip()))
-
-    status = 200
-    content_type = "text/html; charset=utf-8"
-    filtered_headers = []
-    for k, v in headers:
-        if k.lower() == "content-type":
-            content_type = v
-        elif k.lower() == "status":
+        with ledger_lock(WORK_DIR):
+            password_hash = os.environ.get("LEDGER_PASSWORD_HASH")
+            if password_hash:
+                env["LEDGER_AUTH_MODE"] = "scrypt"
+                if form.get("cmd") == "login":
+                    valid = check_password_hash(password_hash, form.get("pass", ""))
+                    env["LEDGER_AUTH_VERIFIED"] = "Y" if valid else "N"
+            process = subprocess.Popen(
+                [BIN_PATH], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env=env, cwd=WORK_DIR)
             try:
-                status = int(v.split()[0])
-            except ValueError:
-                pass
-        else:
-            filtered_headers.append((k, v))
+                stdout, stderr = process.communicate(input=input_data, timeout=SUBPROCESS_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()  # reap the child and release its file descriptors
+                logger.error("backend_timeout request=%s", g.request_id)
+                abort(504, "Backend-ul nu a raspuns la timp.")
+    except TimeoutError:
+        response = Response("Registrul este ocupat. Reincearca.", status=503)
+        response.headers["Retry-After"] = "2"
+        return response
+    except OSError:
+        logger.exception("backend_unavailable request=%s", g.request_id)
+        abort(502, "Backend indisponibil.")
+    if process.returncode != 0 or len(stdout) > MAX_OUTPUT:
+        logger.error("backend_failed request=%s exit=%s", g.request_id, process.returncode)
+        abort(502, "Backend-ul a esuat.")
+    if stderr:
+        logger.warning("backend_stderr request=%s bytes=%s", g.request_id, len(stderr))
+    return cgi_response(stdout, env["LEDGER_CSRF_TOKEN"])
 
-    return Response(body, status=status, headers=filtered_headers,
-                    content_type=content_type)
+
+def cgi_response(stdout, current_csrf):
+    raw = stdout.decode("utf-8", errors="replace")
+    separator = next((sep for sep in ("\r\n\r\n", "\n\n", "\n \n") if sep in raw), None)
+    if not separator:
+        abort(502, "Raspuns CGI invalid.")
+    head, body = raw.split(separator, 1)
+    response = Response(body, content_type="text/html; charset=utf-8")
+    for line in head.replace("\r\n", "\n").split("\n"):
+        if ":" not in line:
+            continue
+        key, value = (part.strip() for part in line.split(":", 1))
+        if key.lower() in {"content-type", "content-disposition"}:
+            response.headers[key] = value
+        elif key.lower() == "status":
+            if not re.fullmatch(r"[1-5][0-9]{2}(?: .*)?", value):
+                abort(502)
+            response.status_code = int(value[:3])
+        elif key.lower() == "set-cookie" and value.startswith("session="):
+            response.headers.add("Set-Cookie", value.replace("session=", SESSION_COOKIE + "=", 1))
+            new_session = value.split(";", 1)[0].split("=", 1)[1]
+            response.set_data(response.get_data(as_text=True).replace(
+                current_csrf, csrf_token(app.config["SECRET_KEY"], new_session)))
+    return response
 
 
 if __name__ == "__main__":

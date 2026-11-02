@@ -59,3 +59,14 @@ prin acest audit de cod. Verdict: remediere înainte de extinderea accesului.
 - https://flask.palletsprojects.com/en/stable/web-security/
 - https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
 - https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+
+## Etapa 1 implementată
+
+S01, S03–S11 și S15 au remedieri în surse și teste de regresie. 46 teste trecute,
+inclusiv scrieri concurente, token CSRF între sesiuni și reap după timeout.
+Cookie-ul de sesiune folosește acum prefixul `__Host-`; sesiunile browser vechi
+necesită autentificare din nou. CSRF este verificat în bridge-ul HTTP, care rămâne
+singurul punct de expunere a binarului CGI. Rularea CGI directă nu este o interfață
+publică suportată. S02: scrypt 131072:8:1 disponibil prin `manage.py`; hash-ul existent
+nu poate fi convertit în scrypt(parola) fără parola originală, deci rotația rămâne
+restantă. S14 și schimbările de nginx vor fi aplicate odată cu deploy-ul verificat.

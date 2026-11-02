@@ -23,10 +23,6 @@ FILE-CONTROL.
         RECORD KEY IS LOCK-IP
         FILE STATUS IS FS-LOCKOUT.
 
-    SELECT TMPTOKEN-FILE ASSIGN TO "data/.tmptoken"
-        ORGANIZATION IS LINE SEQUENTIAL
-        FILE STATUS IS FS-TMPTOKEN.
-
     SELECT OPTIONAL AUDIT-FILE ASSIGN TO "data/audit.log"
         ORGANIZATION IS LINE SEQUENTIAL
         FILE STATUS IS FS-AUDIT.
@@ -53,9 +49,6 @@ FD  LOCKOUT-FILE.
     05  LOCK-FAILS          PIC 9(3).
     05  LOCK-WIN-EXP        PIC 9(12).
 
-FD  TMPTOKEN-FILE.
-01  TMPTOKEN-REC            PIC X(40).
-
 FD  AUDIT-FILE.
 01  AUDIT-REC               PIC X(160).
 
@@ -63,7 +56,6 @@ WORKING-STORAGE SECTION.
 01  FS-LEDGER               PIC XX.
 01  FS-SESSIONS             PIC XX.
 01  FS-LOCKOUT              PIC XX.
-01  FS-TMPTOKEN             PIC XX.
 01  FS-AUDIT                PIC XX.
 01  W-EOF                   PIC X VALUE "N".
 01  W-DISPLAY-AMOUNT        PIC --,---,--9.99.
@@ -155,8 +147,21 @@ WORKING-STORAGE SECTION.
 01  W-AUD-ACT               PIC X(12).
 01  W-AUD-DET               PIC X(90).
 
-01  W-SEED                  PIC 9(9).
-01  W-RAND-VAL              PIC 9(3).
+01  W-RANDOM-BYTES          PIC X(16).
+01  W-RANDOM-COUNT          USAGE BINARY-LONG SIGNED.
+01  W-RANDOM-BYTE           USAGE BINARY-LONG.
+01  W-TOKEN-OK              PIC X VALUE "N".
+01  W-SESSION-STORED        PIC X VALUE "N".
+01  W-AUTH-MODE             PIC X(10).
+01  W-AUTH-VERIFIED         PIC X.
+01  W-CSRF-TOKEN            PIC X(300).
+01  W-QUERY-I               PIC 9(4).
+01  W-DATE-NUM              PIC 9(8).
+01  W-AMOUNT-WIDE           PIC S9(18)V9(9).
+01  W-AMOUNT-DIGITS         PIC 9(3).
+01  W-AMOUNT-DECIMALS       PIC 9(3).
+01  W-AMOUNT-DOT            PIC X.
+01  W-AMOUNT-LEN            PIC 9(3).
 01  HEX-DIGITS              PIC X(16) VALUE "0123456789abcdef".
 
 *> Credentials (configurable via env vars)
@@ -290,6 +295,9 @@ COMPUTE-ABS-NOW.
       + FUNCTION NUMVAL(W-CURRENT-DATE-STR(13:2)).
 
 LOAD-CONFIG.
+    ACCEPT W-AUTH-MODE FROM ENVIRONMENT "LEDGER_AUTH_MODE".
+    ACCEPT W-AUTH-VERIFIED FROM ENVIRONMENT "LEDGER_AUTH_VERIFIED".
+    ACCEPT W-CSRF-TOKEN FROM ENVIRONMENT "LEDGER_CSRF_TOKEN".
     DISPLAY "LEDGER_USER" UPON ENVIRONMENT-NAME.
     ACCEPT W-CFG-USER FROM ENVIRONMENT-VALUE.
     IF W-CFG-USER = SPACES OR LOW-VALUES
@@ -298,7 +306,7 @@ LOAD-CONFIG.
     DISPLAY "LEDGER_PASS" UPON ENVIRONMENT-NAME.
     ACCEPT W-CFG-PASS FROM ENVIRONMENT-VALUE.
     IF W-CFG-PASS = SPACES OR LOW-VALUES
-        MOVE "cobol2026" TO W-CFG-PASS
+        MOVE SPACES TO W-CFG-PASS
     END-IF.
 *>  Daca LEDGER_PASS_HASH (SHA-256 hex) e setat, are prioritate
 *>  si parola in clar nu mai e necesara in mediu.
@@ -311,7 +319,8 @@ LOAD-CONFIG.
     ACCEPT W-TTL-RAW FROM ENVIRONMENT-VALUE.
     IF W-TTL-RAW NOT = SPACES AND W-TTL-RAW NOT = LOW-VALUES
         IF FUNCTION TRIM(W-TTL-RAW) IS NUMERIC
-            MOVE FUNCTION NUMVAL(W-TTL-RAW) TO W-SESSION-TTL
+            COMPUTE W-SESSION-TTL = FUNCTION MIN(86400,
+                FUNCTION MAX(1, FUNCTION NUMVAL(W-TTL-RAW)))
         END-IF
     END-IF.
     MOVE FUNCTION CURRENT-DATE TO W-CURRENT-DATE-STR.
@@ -375,11 +384,11 @@ PARSE-QUERY-STRING.
              W-PAIR(11), W-PAIR(12), W-PAIR(13), W-PAIR(14), W-PAIR(15),
              W-PAIR(16), W-PAIR(17), W-PAIR(18), W-PAIR(19), W-PAIR(20)
     END-UNSTRING.
-    PERFORM VARYING W-I FROM 1 BY 1 UNTIL W-I > 20
-        IF W-PAIR(W-I) NOT = SPACES
+    PERFORM VARYING W-QUERY-I FROM 1 BY 1 UNTIL W-QUERY-I > 20
+        IF W-PAIR(W-QUERY-I) NOT = SPACES
             MOVE SPACES TO W-PAIR-KEY
             MOVE SPACES TO W-PAIR-VAL
-            UNSTRING W-PAIR(W-I) DELIMITED BY "="
+            UNSTRING W-PAIR(W-QUERY-I) DELIMITED BY "="
                 INTO W-PAIR-KEY, W-PAIR-VAL
             END-UNSTRING
             MOVE W-PAIR-VAL TO W-URL-IN
@@ -595,7 +604,7 @@ HEX-TO-CHAR.
             WHEN OTHER CONTINUE
         END-EVALUATE
     END-PERFORM.
-    IF W-HEX-NUM < 32 AND W-HEX-NUM NOT = 0
+    IF W-HEX-NUM < 32 OR W-HEX-NUM = 127
         MOVE "?" TO W-HEX-CHAR
     ELSE
         MOVE FUNCTION CHAR(W-HEX-NUM + 1) TO W-HEX-CHAR
@@ -641,58 +650,44 @@ HTML-ESCAPE.
     END-PERFORM.
 
 GENERATE-TOKEN.
+*> Linux getrandom blocks until OS entropy is available; no weak fallback.
+    MOVE "N" TO W-TOKEN-OK.
     MOVE SPACES TO W-NEW-TOKEN.
-    CALL "SYSTEM"
-        USING "openssl rand -hex 16 > data/.tmptoken 2>/dev/null"
+    CALL STATIC "getrandom" USING
+        BY REFERENCE W-RANDOM-BYTES
+        BY VALUE 16 BY VALUE 0 RETURNING W-RANDOM-COUNT
     END-CALL.
-    OPEN INPUT TMPTOKEN-FILE.
-    IF FS-TMPTOKEN = "00"
-        READ TMPTOKEN-FILE
-            AT END CONTINUE
-            NOT AT END
-                MOVE TMPTOKEN-REC(1:32) TO W-NEW-TOKEN
-        END-READ
-        CLOSE TMPTOKEN-FILE
+    IF W-RANDOM-COUNT NOT = 16
+        EXIT PARAGRAPH
     END-IF.
-    IF W-NEW-TOKEN = SPACES OR LOW-VALUES
-        PERFORM GENERATE-TOKEN-FALLBACK
-    END-IF.
-    CALL "SYSTEM" USING "rm -f data/.tmptoken" END-CALL.
-
-GENERATE-TOKEN-FALLBACK.
-    COMPUTE W-SEED = FUNCTION SECONDS-PAST-MIDNIGHT * 1000
-                   + FUNCTION RANDOM(1) * 1000000.
-    COMPUTE W-RAND-VAL = FUNCTION INTEGER(FUNCTION RANDOM(W-SEED) * 16).
-    IF W-RAND-VAL > 15
-        MOVE 15 TO W-RAND-VAL
-    END-IF.
-    COMPUTE W-J = W-RAND-VAL + 1.
-    MOVE HEX-DIGITS(W-J:1) TO W-NEW-TOKEN(1:1).
-    PERFORM VARYING W-I FROM 2 BY 1 UNTIL W-I > 32
-        COMPUTE W-RAND-VAL = FUNCTION INTEGER(FUNCTION RANDOM * 16)
-        IF W-RAND-VAL > 15
-            MOVE 15 TO W-RAND-VAL
-        END-IF
-        COMPUTE W-J = W-RAND-VAL + 1
-        MOVE HEX-DIGITS(W-J:1) TO W-NEW-TOKEN(W-I:1)
+    PERFORM VARYING W-I FROM 1 BY 1 UNTIL W-I > 16
+        COMPUTE W-RANDOM-BYTE =
+            FUNCTION ORD(W-RANDOM-BYTES(W-I:1)) - 1
+        COMPUTE W-J = (W-I - 1) * 2 + 1
+        COMPUTE W-ENC-HI = FUNCTION INTEGER(W-RANDOM-BYTE / 16) + 1
+        COMPUTE W-ENC-LO = FUNCTION MOD(W-RANDOM-BYTE, 16) + 1
+        MOVE HEX-DIGITS(W-ENC-HI:1) TO W-NEW-TOKEN(W-J:1)
+        ADD 1 TO W-J
+        MOVE HEX-DIGITS(W-ENC-LO:1) TO W-NEW-TOKEN(W-J:1)
     END-PERFORM.
+    MOVE "Y" TO W-TOKEN-OK.
 
 HANDLE-ACTION.
     MOVE "cmd" TO W-KEY-LOOKUP.
     PERFORM GET-FORM-VALUE.
     MOVE W-VALUE-OUT TO W-CMD.
     EVALUATE TRUE
-        WHEN W-CMD(1:5) = "login"
+        WHEN W-CMD = "login"
             PERFORM DO-LOGIN
-        WHEN W-CMD(1:6) = "logout"
+        WHEN W-CMD = "logout"
             IF W-LOGGED-IN = "Y"
                 PERFORM DO-LOGOUT
             END-IF
-        WHEN W-CMD(1:6) = "update" AND W-LOGGED-IN = "Y"
+        WHEN W-CMD = "update" AND W-LOGGED-IN = "Y"
             PERFORM DO-UPDATE
-        WHEN W-CMD(1:3) = "add" AND W-LOGGED-IN = "Y"
+        WHEN W-CMD = "add" AND W-LOGGED-IN = "Y"
             PERFORM DO-ADD
-        WHEN W-CMD(1:3) = "del" AND W-LOGGED-IN = "Y"
+        WHEN W-CMD = "del" AND W-LOGGED-IN = "Y"
             PERFORM DO-DELETE
         WHEN OTHER
             CONTINUE
@@ -720,8 +715,19 @@ DO-LOGIN.
     PERFORM VERIFY-CREDENTIALS.
     IF W-VALID = "Y"
         PERFORM GENERATE-TOKEN
+        IF W-TOKEN-OK NOT = "Y"
+            MOVE "Generatorul de sesiuni este indisponibil."
+                TO W-ERROR-MSG
+            MOVE "Y" TO W-HAS-ERROR
+            EXIT PARAGRAPH
+        END-IF
         MOVE W-NEW-TOKEN TO W-COOKIE-TOKEN
         PERFORM STORE-SESSION
+        IF W-SESSION-STORED NOT = "Y"
+            MOVE "Sesiunea nu a putut fi salvata." TO W-ERROR-MSG
+            MOVE "Y" TO W-HAS-ERROR
+            EXIT PARAGRAPH
+        END-IF
         PERFORM CLEAR-LOCKOUT
         MOVE "Y" TO W-LOGGED-IN
         MOVE "Y" TO W-SET-COOKIE
@@ -747,6 +753,12 @@ VERIFY-CREDENTIALS.
     IF FUNCTION TRIM(W-LOGIN-USER) NOT = FUNCTION TRIM(W-CFG-USER)
         EXIT PARAGRAPH
     END-IF.
+    IF W-AUTH-MODE = "scrypt"
+        IF W-AUTH-VERIFIED = "Y"
+            MOVE "Y" TO W-VALID
+        END-IF
+        EXIT PARAGRAPH
+    END-IF.
     IF W-CFG-HASH NOT = SPACES
         MOVE SPACES TO W-HASH-IN
         MOVE FUNCTION TRIM(W-LOGIN-PASS) TO W-HASH-IN
@@ -761,12 +773,14 @@ VERIFY-CREDENTIALS.
             MOVE "Y" TO W-VALID
         END-IF
     ELSE
-        IF FUNCTION TRIM(W-LOGIN-PASS) = FUNCTION TRIM(W-CFG-PASS)
+        IF W-CFG-PASS NOT = SPACES AND LOW-VALUES
+           AND FUNCTION TRIM(W-LOGIN-PASS) = FUNCTION TRIM(W-CFG-PASS)
             MOVE "Y" TO W-VALID
         END-IF
     END-IF.
 
 STORE-SESSION.
+    MOVE "N" TO W-SESSION-STORED.
     OPEN I-O SESSIONS-FILE.
     IF FS-SESSIONS = "35"
         OPEN OUTPUT SESSIONS-FILE
@@ -782,6 +796,7 @@ STORE-SESSION.
     MOVE W-REMOTE-ADDR TO SESS-IP.
     WRITE SESS-RECORD
         INVALID KEY CONTINUE
+        NOT INVALID KEY MOVE "Y" TO W-SESSION-STORED
     END-WRITE.
     CLOSE SESSIONS-FILE.
 
@@ -953,6 +968,12 @@ WRITE-TRANSACTION.
                 NOT AT END MOVE TRANS-ID TO W-LAST-ID
             END-READ
     END-START.
+    IF W-LAST-ID = 999999
+        CLOSE TRANSACTIONS-FILE
+        MOVE "Limita de tranzactii a fost atinsa." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
     COMPUTE TRANS-ID = W-LAST-ID + 1.
     MOVE W-DATE-RAW TO TRANS-DATE.
     MOVE W-CAT-RAW TO TRANS-CAT.
@@ -1115,30 +1136,44 @@ WRITE-AUDIT.
 
 VALIDATE-AMOUNT.
     MOVE "Y" TO W-VALID.
-    IF FUNCTION TRIM(W-AMOUNT-RAW) = SPACES
+    COMPUTE W-AMOUNT-LEN =
+        FUNCTION LENGTH(FUNCTION TRIM(W-AMOUNT-RAW)).
+    MOVE 0 TO W-AMOUNT-DIGITS W-AMOUNT-DECIMALS.
+    MOVE "N" TO W-AMOUNT-DOT.
+    IF W-AMOUNT-LEN = 0
         MOVE "N" TO W-VALID
         EXIT PARAGRAPH
     END-IF.
-    MOVE 0 TO W-J.
-    PERFORM VARYING W-I FROM 1 BY 1 UNTIL W-I > 20
-        IF W-AMOUNT-RAW(W-I:1) NOT = SPACE
-            EVALUATE W-AMOUNT-RAW(W-I:1)
-                WHEN "0" THRU "9" CONTINUE
-                WHEN "."
-                    ADD 1 TO W-J
-                    IF W-J > 1 MOVE "N" TO W-VALID END-IF
-                WHEN "-"
-                    IF W-I > 1 MOVE "N" TO W-VALID END-IF
-                WHEN "+"
-                    IF W-I > 1 MOVE "N" TO W-VALID END-IF
-                WHEN OTHER MOVE "N" TO W-VALID
-            END-EVALUATE
-        END-IF
+    PERFORM VARYING W-I FROM 1 BY 1 UNTIL W-I > W-AMOUNT-LEN
+        EVALUATE W-AMOUNT-RAW(W-I:1)
+            WHEN "0" THRU "9"
+                ADD 1 TO W-AMOUNT-DIGITS
+                IF W-AMOUNT-DOT = "Y"
+                    ADD 1 TO W-AMOUNT-DECIMALS
+                END-IF
+            WHEN "."
+                IF W-AMOUNT-DOT = "Y"
+                    MOVE "N" TO W-VALID
+                END-IF
+                MOVE "Y" TO W-AMOUNT-DOT
+            WHEN "+" WHEN "-"
+                IF W-I NOT = 1 MOVE "N" TO W-VALID END-IF
+            WHEN OTHER MOVE "N" TO W-VALID
+        END-EVALUATE
     END-PERFORM.
+    IF W-AMOUNT-DIGITS = 0 OR W-AMOUNT-DECIMALS > 2
+        MOVE "N" TO W-VALID
+    END-IF.
     IF W-VALID = "Y"
-        COMPUTE W-AMOUNT-NUM = FUNCTION NUMVAL(W-AMOUNT-RAW)
-        IF W-AMOUNT-NUM > 9999999.99 OR W-AMOUNT-NUM < -9999999.99
+        COMPUTE W-AMOUNT-WIDE = FUNCTION NUMVAL(W-AMOUNT-RAW)
+            ON SIZE ERROR MOVE "N" TO W-VALID
+        END-COMPUTE
+        IF W-AMOUNT-WIDE > 9999999.99
+           OR W-AMOUNT-WIDE < -9999999.99
             MOVE "N" TO W-VALID
+        END-IF
+        IF W-VALID = "Y"
+            MOVE W-AMOUNT-WIDE TO W-AMOUNT-NUM
         END-IF
     END-IF.
 
@@ -1168,6 +1203,14 @@ VALIDATE-DATE.
             MOVE "N" TO W-VALID
         END-IF
     END-IF.
+    IF W-VALID = "Y"
+        STRING W-DATE-RAW(1:4) W-DATE-RAW(6:2)
+               W-DATE-RAW(9:2) INTO W-DATE-NUM
+        END-STRING
+        IF FUNCTION TEST-DATE-YYYYMMDD(W-DATE-NUM) NOT = 0
+            MOVE "N" TO W-VALID
+        END-IF
+    END-IF.
 
 VALIDATE-CATEGORY.
     MOVE "N" TO W-VALID.
@@ -1185,14 +1228,14 @@ DISPLAY-PAGE.
     IF W-SET-COOKIE = "Y"
         DISPLAY "Set-Cookie: session=" W-NEW-TOKEN
                 "; Path=/; HttpOnly; Secure; SameSite=Strict"
-                "; Max-Age=28800"
+                "; Max-Age=" W-SESSION-TTL
     END-IF.
     IF W-SET-COOKIE = "L"
         DISPLAY "Set-Cookie: session=; Path=/; HttpOnly; Secure; "
                 "SameSite=Strict; Max-Age=0"
     END-IF.
     DISPLAY " ".
-    DISPLAY "<!DOCTYPE html><html><head><meta charset='utf-8'>".
+    DISPLAY "<!DOCTYPE html><html lang='ro'><head><meta charset='utf-8'>".
     DISPLAY "<meta name='viewport' content='width=device-width, "
             "initial-scale=1'>".
     DISPLAY "<title>Ledger of Ages</title>".
@@ -1274,6 +1317,8 @@ DISPLAY-HEADER.
             "<a href='?view=AUDIT'>Audit</a></nav>"
             "<span>Logat ca <b>" FUNCTION TRIM(W-ESC-OUT) "</b> "
             "<form method='POST' style='display:inline'>"
+            "<input type='hidden' name='csrf_token' value='"
+            FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='logout'>"
             "<button type='submit' class='btn'>Logout</button>"
             "</form></span></div></div>".
@@ -1312,6 +1357,8 @@ DISPLAY-LOGIN.
     DISPLAY "<div class='card' style='max-width:400px;margin-top:80px;'>"
             "<h2>Login</h2>"
             "<form method='POST'>"
+            "<input type='hidden' name='csrf_token' value='"
+            FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='login'>"
             "<p>User:<br>"
             "<input type='text' name='user' required "
@@ -1378,6 +1425,8 @@ DISPLAY-ADD-FORM.
     END-IF.
     DISPLAY "<div class='card'><h2>Adauga tranzactie</h2>"
             "<form method='POST'>"
+            "<input type='hidden' name='csrf_token' value='"
+            FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='add'>"
             "Data: <input type='date' name='date' value='"
             W-TODAY-STR "' required> "
@@ -1399,6 +1448,8 @@ DISPLAY-EDIT-FORM.
     DISPLAY "<div class='card'><h2>Editeaza tranzactia #"
             W-EDIT-ID "</h2>"
             "<form method='POST'>"
+            "<input type='hidden' name='csrf_token' value='"
+            FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='update'>"
             "<input type='hidden' name='id' value='" W-EDIT-ID "'>"
             "Data: <input type='date' name='date' value='"
@@ -1601,6 +1652,8 @@ RENDER-ROW.
             "<a class='btn btn-edit' href='?edit=" TRANS-ID
             "'>Edit</a> "
             "<form method='POST' style='margin:0;display:inline'>"
+            "<input type='hidden' name='csrf_token' value='"
+            FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='del'>"
             "<input type='hidden' name='id' value='" TRANS-ID "'>"
             "<button type='submit' class='btn btn-del' "
@@ -1670,6 +1723,10 @@ RENDER-CSV-ROW.
 CSV-ESCAPE.
     MOVE SPACES TO W-CSV-OUT.
     MOVE 0 TO W-CSV-OUT-LEN.
+    IF W-CSV-IN(1:1) = "=" OR "+" OR "-" OR "@"
+        MOVE "'" TO W-CSV-OUT(1:1)
+        MOVE 1 TO W-CSV-OUT-LEN
+    END-IF.
     MOVE 0 TO W-CSV-IN-LEN.
     PERFORM VARYING W-CSV-I FROM 60 BY -1
             UNTIL W-CSV-I = 0 OR W-CSV-IN(W-CSV-I:1) NOT = SPACE

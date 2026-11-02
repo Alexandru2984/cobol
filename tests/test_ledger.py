@@ -36,7 +36,9 @@ def workdir(tmp_path_factory):
 def client(workdir, monkeypatch):
     monkeypatch.setenv("LEDGER_BIN", str(workdir / "ledger.cgi"))
     monkeypatch.setenv("LEDGER_DIR", str(workdir))
+    monkeypatch.setenv("LEDGER_CSRF_SECRET", "test-csrf-secret-with-at-least-32-bytes")
     monkeypatch.setenv("LEDGER_USER", USER)
+    monkeypatch.delenv("LEDGER_PASSWORD_HASH", raising=False)
     monkeypatch.setenv("LEDGER_PASS", PASS)
     monkeypatch.delenv("LEDGER_PASS_HASH", raising=False)
     monkeypatch.delenv("LEDGER_SESSION_TTL", raising=False)
@@ -51,6 +53,18 @@ def client(workdir, monkeypatch):
     app_module.app.config["TESTING"] = True
     # fara cookie jar: jar-ul ar suprascrie header-ele Cookie explicite,
     # iar testele de multi-sesiune au nevoie de control per-request
+    from flask.testing import FlaskClient
+
+    class SecureClient(FlaskClient):
+        def post(self, *args, **kwargs):
+            if kwargs.pop("csrf", True):
+                page = self.get("/", headers=kwargs.get("headers", {}))
+                match = re.search(rb"name='csrf_token' value='([^']+)'", page.data)
+                if match and isinstance(kwargs.get("data"), dict):
+                    kwargs["data"] = {**kwargs["data"], "csrf_token": match[1].decode()}
+            return super().post(*args, **kwargs)
+
+    app_module.app.test_client_class = SecureClient
     return app_module.app.test_client(use_cookies=False)
 
 
@@ -58,8 +72,8 @@ def login(client, user=USER, password=PASS):
     resp = client.post("/", data={"cmd": "login", "user": user,
                                   "pass": password})
     set_cookie = resp.headers.get("Set-Cookie", "")
-    m = re.search(r"session=([0-9a-f]{32})", set_cookie)
-    return resp, ({"Cookie": f"session={m.group(1)}"} if m else {})
+    m = re.search(r"__Host-ledger-session=([0-9a-f]{32})", set_cookie)
+    return resp, ({"Cookie": f"__Host-ledger-session={m.group(1)}"} if m else {})
 
 
 def add(client, headers, date, cat, desc, amount):
@@ -276,3 +290,147 @@ def test_search(client):
     assert b"Piata Obor" in resp.data
     assert b"Kaufland" not in resp.data
     assert b"Total (1 tranzactii)" in resp.data
+
+
+def test_csrf_required_for_login_and_mutation(client):
+    assert client.post("/", data={"cmd": "login", "user": USER, "pass": PASS},
+                       csrf=False).status_code == 403
+    _, headers = login(client)
+    assert add(client, headers, "2026-07-01", "Hobby", "valid", "1").status_code == 200
+    assert client.post("/", data={"cmd": "del", "id": "000001"},
+                       headers=headers, csrf=False).status_code == 403
+    page = client.get("/", headers=headers)
+    token = re.search(rb"name='csrf_token' value='([^']+)'", page.data)[1].decode()
+    assert client.post("/", data={"cmd": "del", "id": "000001", "csrf_token": token},
+                       headers={**headers, "Origin": "https://evil.micutu.com"},
+                       csrf=False).status_code == 403
+    # A valid token for one session cannot authorize another session.
+    _, other = login(client)
+    assert client.post("/", data={"cmd": "logout", "csrf_token": token},
+                       headers=other, csrf=False).status_code == 403
+
+
+def test_cookie_and_cache_headers(client):
+    resp, _ = login(client)
+    cookie = resp.headers["Set-Cookie"]
+    for flag in ("__Host-ledger-session=", "Secure", "HttpOnly", "SameSite=Strict", "Path=/"):
+        assert flag in cookie
+    assert "Domain=" not in cookie
+    assert "no-store" in resp.headers["Cache-Control"]
+    assert "'unsafe-inline'" not in resp.headers["Content-Security-Policy"].split("script-src")[1].split(";")[0]
+    assert client.get("/", headers={"Host": "attacker.example"}).status_code == 400
+
+
+def test_missing_credentials_fail_closed(client, monkeypatch):
+    monkeypatch.delenv("LEDGER_PASS")
+    assert client.get("/").status_code == 503
+    assert client.get("/health").status_code == 503
+
+
+def test_scrypt_credentials(client, monkeypatch):
+    from werkzeug.security import generate_password_hash
+    monkeypatch.setenv("LEDGER_PASSWORD_HASH", generate_password_hash(PASS, method="scrypt:131072:8:1"))
+    assert login(client)[1]
+    assert not login(client, password="wrong")[1]
+    monkeypatch.setenv("LEDGER_PASSWORD_HASH", "invalid")
+    assert client.get("/").status_code == 503  # no downgrade to the legacy password
+
+
+@pytest.mark.parametrize("amount", [".", "+", "-", "1.234", "10000000.01", "-10000000", "99999999999999999999", "1 2"])
+def test_amounts_rejected_before_truncation(client, amount):
+    _, headers = login(client)
+    resp = add(client, headers, "2026-07-01", "Hobby", "invalid amount", amount)
+    assert b"Suma invalida" in resp.data
+    assert b"Total (0 tranzactii)" in resp.data
+
+
+@pytest.mark.parametrize("date", ["2026-02-29", "2026-04-31", "0000-01-01"])
+def test_real_calendar_validation(client, date):
+    _, headers = login(client)
+    assert b"Data invalida" in add(client, headers, date, "Hobby", "invalid date", "1").data
+    assert b"leap year" in add(client, headers, "2024-02-29", "Hobby", "leap year", "1").data
+
+
+@pytest.mark.parametrize("query", ["q=a&q=b", "q=%00", "q=%0a", "q=%GG", "edit=1000001", "page=abc"])
+def test_ambiguous_query_rejected(client, query):
+    assert client.get("/?" + query).status_code == 400
+
+
+def test_request_limits(client):
+    assert client.get("/?q=" + "x" * 1030).status_code == 414
+    assert client.post("/", data=b"x" * 4097, content_type="application/x-www-form-urlencoded",
+                       csrf=False).status_code == 413
+    assert client.post("/", json={"cmd": "add"}, csrf=False).status_code == 415
+
+
+def test_csv_formula_neutralized(client):
+    _, headers = login(client)
+    for desc in ("=1+1", "+1+1", "-1+1", "@SUM(1)"):
+        add(client, headers, "2026-07-01", "Hobby", desc, "1")
+    exported = client.get("/?export=csv", headers=headers).data
+    assert b'"\'=1+1"' in exported
+    assert b'"\'@SUM(1)"' in exported
+
+
+def test_proxy_headers_only_from_trusted_peers(client):
+    # Arbitrary internet peers cannot pick the audit/lockout address.
+    from security import client_ip
+    import app
+    with app.app.test_request_context("/", headers={"X-Real-IP": "203.0.113.99"},
+                                     environ_base={"REMOTE_ADDR": "198.51.100.4"}):
+        assert client_ip(["127.0.0.1/32"]) == "198.51.100.4"
+
+
+def test_query_order_does_not_skip_filters(client):
+    _, headers = login(client)
+    add(client, headers, "2026-07-01", "Hobby", "yes", "1")
+    add(client, headers, "2026-07-01", "Mancare", "no", "2")
+    page = client.get("/?page=1&filter=Hobby&q=yes", headers=headers)
+    assert b"Total (1 tranzactii)" in page.data
+
+
+def test_parallel_writes_preserve_all_rows(client):
+    from concurrent.futures import ThreadPoolExecutor
+    import app
+    _, headers = login(client)
+
+    def write(index):
+        with app.app.test_client(use_cookies=False) as worker:
+            response = add(worker, headers, "2026-07-01", "Hobby", f"parallel{index}", "1")
+            assert response.status_code == 200
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(write, range(8)))
+    assert b"Total (8 tranzactii)" in client.get("/", headers=headers).data
+
+
+def test_subprocess_timeout_is_reaped(client, monkeypatch, tmp_path):
+    import app
+    executable = tmp_path / "slow.cgi"
+    executable.write_text("#!/usr/bin/python3\nimport time\ntime.sleep(3)\n")
+    executable.chmod(0o700)
+    monkeypatch.setattr(app, "BIN_PATH", str(executable))
+    monkeypatch.setattr(app, "SUBPROCESS_TIMEOUT", 0.02)
+    real_popen = subprocess.Popen
+    children = []
+
+    def capture(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", capture)
+    assert client.get("/").status_code == 504
+    assert children[0].returncode is not None
+    with pytest.raises(ChildProcessError):
+        os.waitpid(children[0].pid, os.WNOHANG)
+
+
+def test_login_response_has_token_bound_to_new_session(client):
+    response, headers = login(client)
+    token = re.search(rb"name='csrf_token' value='([^']+)'", response.data)[1].decode()
+    response = client.post("/", data={"cmd": "add", "date": "2026-07-01", "cat": "Hobby",
+                                      "desc": "first action", "amount": "1", "csrf_token": token},
+                           headers=headers, csrf=False)
+    assert response.status_code == 200
+    assert b"first action" in response.data

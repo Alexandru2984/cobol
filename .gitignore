@@ -34,3 +34,9 @@ venv/
 # IDE settings
 .vscode/
 .idea/
+
+# Private runtime locks and release snapshots
+data/.ledger.lock
+data/.csrf-key
+.rollback/
+artifacts/
