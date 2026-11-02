@@ -1,0 +1,44 @@
+# Plan de produs — Ledger of Ages
+
+## Etapa 1: fundație sigură
+
+Închidere S01–S11, S14–S15, regresii automate prin COBOL real, păstrarea formatului
+ISAM și a datelor. Parole scrypt disponibile fără schimbarea forțată a parolei existente.
+Fără introducerea unor servicii externe.
+
+## Etapa 2: experiență utilizabilă zilnic
+
+Interfață responsive cu navigare clară, formulare etichetate, contrast și focus vizibil,
+carduri mobile pentru tranzacții, temă luminoasă/întunecată, stare goală utilă,
+confirmare la ștergere, indicatori venituri/cheltuieli/net și rată de economisire,
+filtru venituri/cheltuieli, intervale rapide, filtre păstrate în rapoarte și export,
+sortare cronologică inversă, scurtături de tastatură, imprimare și feedback la salvare.
+Corectarea limitelor raportului lunar și testare desktop/mobile cu browser real.
+
+## Etapa 3: operare reproductibilă
+
+Scripturi de backup/deploy/rollback adaptate runtime-ului, configurații de producție
+versionate fără secrete, verificare backup și integritate ISAM, runbook de incidente,
+health și smoke checks pe domeniul public. Commit distinct după fiecare etapă.
+
+## Etapa 4: extinderi propuse, în ordinea utilității
+
+1. Bugete lunare pe categorie cu progres și praguri configurabile.
+2. Tranzacții recurente cu previzualizare și evitare de duplicate.
+3. Import CSV cu mapare, validare, previzualizare și rollback integral.
+4. Conturi multiple, transferuri și reconciliere sold bancar.
+5. Categorii editabile, etichete și reguli automate de clasificare.
+6. Obiective de economisire și prognoză de cash flow.
+7. Comparații lună/an, distribuția cheltuielilor și raport anual exportabil.
+8. Gestionarea sesiunilor active și revocare globală; TOTP/passkeys.
+9. Istoric de modificări și recuperare tranzacții șterse.
+10. Monede multiple cu rată explicită, fără conversii ascunse.
+11. Export JSON și API autentificat, cu permisiuni separate.
+12. PWA instalabilă; cache doar pentru assets, niciodată date financiare.
+13. Cont Unix dedicat, directoare release și backup criptat în afara VPS-ului.
+14. Alerte efective pentru erori, login suspect, spațiu disc și backup expirat.
+15. Documentație utilizator, demo public izolat și teste de accesibilitate.
+
+Etapa 4 este backlog, nu funcționalitate livrată. Funcțiile care schimbă schema ISAM
+necesită migrare versionată și test de restaurare înainte de activare. Multi-user
+necesită model de ownership, autorizare pe fiecare obiect și teste de izolare.
