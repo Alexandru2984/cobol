@@ -130,3 +130,13 @@ Parola existentă este păstrată și nu coincide cu parola implicită publică 
 din cod. Migrarea la scrypt necesită rotație interactivă prin `manage.py`. Contul Unix
 dedicat, backup-ul în afara VPS-ului și integrarea alertelor necesită etape ulterioare.
 Funcțiile din etapa 4 a roadmap-ului sunt propuneri; nu sunt prezentate drept livrate.
+
+### Ajustare Cloudflare după verificarea cu browser public
+
+Cloudflare injecta automat beacon și JavaScript Detections, ambele blocate de CSP.
+Vhost-ul transmite acum `Cache-Control: no-store, private, no-transform`, păstrând
+politica pentru scripturi. Browser-ul public confirmă lipsa scripturilor injectate
+și absența erorilor CSP/JavaScript. Documentația furnizorului descrie respectarea
+no-transform pentru aceste injecții:
+https://developers.cloudflare.com/web-analytics/faq/
+https://developers.cloudflare.com/cloudflare-challenges/challenge-types/javascript-detections/
