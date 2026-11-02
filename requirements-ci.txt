@@ -1,0 +1,2 @@
+# Tooling is installed outside the application's production environment.
+pip-audit==2.10.1

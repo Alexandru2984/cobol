@@ -429,7 +429,7 @@ def test_parallel_writes_preserve_all_rows(client):
 def test_subprocess_timeout_is_reaped(client, monkeypatch, tmp_path):
     import app
     executable = tmp_path / "slow.cgi"
-    executable.write_text("#!/usr/bin/python3\nimport time\ntime.sleep(3)\n")
+    executable.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(3)\n")
     executable.chmod(0o700)
     monkeypatch.setattr(app, "BIN_PATH", str(executable))
     monkeypatch.setattr(app, "SUBPROCESS_TIMEOUT", 0.02)

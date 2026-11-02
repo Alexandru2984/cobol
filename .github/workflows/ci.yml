@@ -1,47 +1,145 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
-
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 0"
 permissions:
   contents: read
-
 concurrency:
-  group: cobol-ci-${{ github.ref }}
+  group: cobol-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  test:
+  core:
+    name: COBOL / Python ${{ matrix.python }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Install GnuCOBOL
-        run: sudo apt-get update && sudo apt-get install -y gnucobol db5.3-util shellcheck
-
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
-
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install -y gnucobol db5.3-util
       - name: Install Python dependencies
-        run: pip install -r requirements.txt -r requirements-dev.txt
-
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Compile all COBOL sources
+        run: make build
+      - name: Test backend, recovery and backup/rollback
         run: |
-          cobc -x -free -I . ledger.cbl sha256.cbl -o ledger.cgi
-          cobc -x -free seed.cbl -o seed
-          cobc -x -free hello.cbl -o hello.cgi
-
-      - name: Run test suite
-        run: python -m pytest tests/ -v
+          mkdir -p artifacts
+          python -m pytest tests/ -v --junitxml=artifacts/pytest.xml
         env:
-          PYTHON: python
           LEDGER_TEST_BIN: ${{ github.workspace }}/ledger.cgi
+      - name: Save pytest-${{ matrix.python }}
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pytest-${{ matrix.python }}
+          path: artifacts/pytest.xml
+          retention-days: 7
 
-      - name: Check operational scripts
-        run: shellcheck backup.sh deploy.sh run_demo.sh
+  static:
+    name: Workflow, shell, Python and JavaScript checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tools/browser/package-lock.json
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Check scripts and syntax
+        run: |
+          shellcheck backup.sh deploy.sh run_demo.sh
+          node --check static/app.js
+          node --check tests/browser_smoke.cjs
+          python3 -m compileall -q app.py security.py manage.py tests
+      - name: Validate workflow with actionlint
+        run: |
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+      - name: Audit browser tooling dependencies
+        run: npm audit --prefix tools/browser --audit-level=high
+
+  browser:
+    name: Desktop and mobile browser workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tools/browser/package-lock.json
+      - name: Install backend dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y gnucobol
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Install pinned browser tooling
+        run: |
+          npm ci --prefix tools/browser --ignore-scripts
+          tools/browser/node_modules/.bin/playwright install --with-deps chromium
+      - name: Run isolated browser suite
+        run: python tests/run_browser.py
+        env:
+          PLAYWRIGHT_MODULE: ${{ github.workspace }}/tools/browser/node_modules/playwright
+      - name: Save browser-screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-screenshots
+          path: |
+            artifacts/*.png
+            artifacts/accessibility.json
+          retention-days: 7
+
+  security:
+    name: Pinned Python dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Install audit tool in separate environment
+        run: |
+          python -m venv "$RUNNER_TEMP/ledger-audit"
+          "$RUNNER_TEMP/ledger-audit/bin/pip" install -r requirements-ci.txt
+      - name: Audit all pinned runtime and test packages
+        run: |
+          mkdir -p artifacts
+          "$RUNNER_TEMP/ledger-audit/bin/pip-audit" -r requirements.txt -r requirements-dev.txt --no-deps --disable-pip --format=json --output artifacts/dependency-audit.json
+      - name: Save dependency-audit
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-audit
+          path: artifacts/dependency-audit.json
+          retention-days: 7
