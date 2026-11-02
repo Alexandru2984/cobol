@@ -33,7 +33,7 @@ jobs:
 
       - name: Compile all COBOL sources
         run: |
-          cobc -x -free ledger.cbl sha256.cbl -o ledger.cgi
+          cobc -x -free -I . ledger.cbl sha256.cbl -o ledger.cgi
           cobc -x -free seed.cbl -o seed
           cobc -x -free hello.cbl -o hello.cgi
 

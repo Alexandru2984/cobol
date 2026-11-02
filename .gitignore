@@ -40,3 +40,7 @@ data/.ledger.lock
 data/.csrf-key
 .rollback/
 artifacts/
+
+# Deployment gate and alternate ISAM index files
+data/.deploying
+data/*.dat.*

@@ -24,16 +24,22 @@ previous=$(readlink -f -- "$CURRENT")
 mkdir -m 700 -- "$release"
 activated=0
 committed=0
+maintenance=0
 rollback() {
     code=$?
     trap - EXIT
     rm -f -- "$RELEASES_DIR/.current-next"
     if (( activated && ! committed )); then
+        (cd -- "$APP_DIR" && flock -x -w 30 data/.ledger.lock env LEDGER_RECOVER_ONLY=1 "$release/ledger.cgi") || {
+            echo 'Recovery failed; keep current release and maintenance gate for operator review.' >&2
+            exit 1
+        }
         ln -s -- "$previous" "$RELEASES_DIR/.current-next"
         mv -Tf -- "$RELEASES_DIR/.current-next" "$CURRENT"
         sudo -n systemctl restart "$SERVICE"
         printf 'Rolled back to %s\n' "$previous" >&2
     fi
+    if (( maintenance )); then rm -f -- "$APP_DIR/data/.deploying"; fi
     if (( ! committed )); then rm -rf -- "$release"; fi
     exit "$code"
 }
@@ -49,11 +55,13 @@ for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
         if actual != expected:
             raise SystemExit(f"Runtime mismatch: {name} {actual}, expected {expected}")
 PYVERSIONS
-cobc -x -free "$release/ledger.cbl" "$release/sha256.cbl" -o "$release/ledger.cgi"
+cobc -x -free -I "$release" "$release/ledger.cbl" "$release/sha256.cbl" -o "$release/ledger.cgi"
 cobc -x -free "$release/seed.cbl" -o "$release/seed"
 "$PYTHON" -m py_compile "$release/app.py" "$release/security.py"
 LEDGER_TEST_BIN="$release/ledger.cgi" "$PYTHON" -m pytest "$release/tests" -q -p no:cacheprovider
 sudo -n /usr/local/sbin/cobol-ledger-backup
+touch "$APP_DIR/data/.deploying"
+maintenance=1
 ln -s -- "$release" "$RELEASES_DIR/.current-next"
 mv -Tf -- "$RELEASES_DIR/.current-next" "$CURRENT"
 activated=1
@@ -72,5 +80,7 @@ curl --max-time 5 --fail --silent "${HEALTH_URL%/health}/" > "$release/smoke.htm
 rg -q "name='csrf_token'" "$release/smoke.html"
 rg -q '/static/app.css' "$release/smoke.html"
 rm -f -- "$release/smoke.html"
+rm -f -- "$APP_DIR/data/.deploying"
+maintenance=0
 committed=1
 printf 'Deployed %s\nPrevious release: %s\n' "$release" "$previous"

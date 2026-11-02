@@ -20,7 +20,7 @@
   }));
   const params = new URLSearchParams(location.search);
   const view = params.get('view') || 'LEDGER';
-  document.querySelector(`[data-nav="${['LEDGER', 'REPORT', 'BUDGET', 'AUDIT'].includes(view) ? view : 'LEDGER'}"]`)?.setAttribute('aria-current', 'page');
+  document.querySelector(`[data-nav="${['LEDGER', 'REPORT', 'BUDGET', 'RECURRING', 'AUDIT'].includes(view) ? view : 'LEDGER'}"]`)?.setAttribute('aria-current', 'page');
   const dateValue = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   document.querySelectorAll('[data-range]').forEach(button => button.addEventListener('click', () => {
     const today = new Date();
@@ -55,11 +55,13 @@
       return;
     }
     const isBudget = form.dataset.delete === 'budget';
-    deleteDialog.querySelector('h2').textContent = isBudget ? 'Elimini limita de buget?' : 'Stergi tranzactia?';
-    deleteDialog.querySelector('p:not(.eyebrow)').textContent = isBudget
+    const isRule = form.dataset.delete === 'rule';
+    deleteDialog.querySelector('h2').textContent = isRule ? 'Arhivezi regula recurenta?' : isBudget ? 'Elimini limita de buget?' : 'Stergi tranzactia?';
+    deleteDialog.querySelector('p:not(.eyebrow)').textContent = isRule
+      ? 'Regula nu va mai aparea in lista. Tranzactiile deja inregistrate raman in registru.' : isBudget
       ? 'Tranzactiile raman in registru. Poti seta o limita noua oricand.'
       : 'Tranzactia va fi eliminata din registru. Actiunea ramane in jurnalul de audit.';
-    deleteDialog.querySelector('[value=confirm]').textContent = isBudget ? 'Elimina limita' : 'Sterge tranzactia';
+    deleteDialog.querySelector('[value=confirm]').textContent = isRule ? 'Arhiveaza regula' : isBudget ? 'Elimina limita' : 'Sterge tranzactia';
     pendingDelete = form;
     deleteDialog.returnValue = '';
     deleteDialog.showModal();

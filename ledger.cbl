@@ -4,6 +4,7 @@ PROGRAM-ID. LEDGER-OF-AGES.
 ENVIRONMENT DIVISION.
 INPUT-OUTPUT SECTION.
 FILE-CONTROL.
+    COPY "cobol/recurring-select.cpy".
     SELECT TRANSACTIONS-FILE ASSIGN TO "data/ledger.dat"
         ORGANIZATION IS INDEXED
         ACCESS MODE IS DYNAMIC
@@ -35,6 +36,7 @@ FILE-CONTROL.
 
 DATA DIVISION.
 FILE SECTION.
+COPY "cobol/recurring-fd.cpy".
 FD  TRANSACTIONS-FILE.
 01  TRANS-RECORD.
     05  TRANS-ID            PIC 9(6).
@@ -66,6 +68,7 @@ FD  AUDIT-FILE.
 01  AUDIT-REC               PIC X(160).
 
 WORKING-STORAGE SECTION.
+COPY "cobol/recurring-ws.cpy".
 01  FS-LEDGER               PIC XX.
 01  FS-SESSIONS             PIC XX.
 01  FS-LOCKOUT              PIC XX.
@@ -311,17 +314,36 @@ WORKING-STORAGE SECTION.
 PROCEDURE DIVISION.
 MAIN-LOGIC.
     PERFORM LOAD-CONFIG.
+    ACCEPT R-CREATE-KEY FROM ENVIRONMENT "LEDGER_RULE_KEY".
+    ACCEPT R-ADMIN FROM ENVIRONMENT "LEDGER_RECOVER_ONLY".
+    ACCEPT R-FAULT FROM ENVIRONMENT "LEDGER_TEST_FAULT".
+    IF R-ADMIN = "1"
+        PERFORM CHECK-LEDGER-STORAGE
+        IF W-STORAGE-ERROR NOT = "Y" PERFORM RECOVER-OCCURRENCES END-IF
+        IF W-STORAGE-ERROR = "Y" MOVE 1 TO RETURN-CODE ELSE MOVE 0 TO RETURN-CODE END-IF
+        STOP RUN
+    END-IF.
     PERFORM READ-CGI-ENV.
     PERFORM CHECK-SESSION.
     PERFORM PARSE-QUERY-STRING.
     IF W-METHOD = "POST"
         PERFORM READ-POST-BODY
         PERFORM PARSE-POST-BODY
-        PERFORM HANDLE-ACTION
+        MOVE "cmd" TO W-KEY-LOOKUP
+        PERFORM GET-FORM-VALUE
+        MOVE W-VALUE-OUT TO W-CMD
+        IF W-LOGGED-IN = "Y" AND W-CMD NOT = "logout"
+            PERFORM CHECK-LEDGER-STORAGE
+            IF W-STORAGE-ERROR NOT = "Y" PERFORM RECOVER-OCCURRENCES END-IF
+        END-IF
+        IF W-STORAGE-ERROR NOT = "Y" OR W-CMD = "logout" PERFORM HANDLE-ACTION END-IF
     END-IF.
     IF W-LOGGED-IN = "Y" PERFORM CHECK-LEDGER-STORAGE END-IF.
     IF W-LOGGED-IN = "Y" AND W-VIEW = "BUDGET" AND W-STORAGE-ERROR NOT = "Y"
         PERFORM LOAD-BUDGET-DATA
+    END-IF.
+    IF W-LOGGED-IN = "Y" AND W-VIEW = "RECURRING" AND W-STORAGE-ERROR NOT = "Y"
+        PERFORM LOAD-RULES-VIEW
     END-IF.
     IF W-LOGGED-IN = "Y" AND W-EXPORT = "Y" AND W-STORAGE-ERROR NOT = "Y"
         PERFORM EXPORT-CSV
@@ -448,6 +470,11 @@ PARSE-QUERY-STRING.
             MOVE W-PAIR-VAL TO W-URL-IN
             PERFORM URL-DECODE
             EVALUATE W-PAIR-KEY
+                WHEN "rule"
+                    MOVE W-URL-OUT TO W-EDIT-ID-RAW
+                    PERFORM PARSE-EDIT-ID
+                    MOVE W-EDIT-ID TO R-EDIT
+                    MOVE 0 TO W-EDIT-ID
                 WHEN "month"
                     MOVE W-URL-OUT TO W-BUDGET-MONTH
                 WHEN "kind"
@@ -744,6 +771,10 @@ HANDLE-ACTION.
             IF W-LOGGED-IN = "Y"
                 PERFORM DO-LOGOUT
             END-IF
+        WHEN W-CMD = "rule-save" AND W-LOGGED-IN = "Y" PERFORM SAVE-RULE
+        WHEN W-CMD = "rule-toggle" AND W-LOGGED-IN = "Y" PERFORM TOGGLE-RULE
+        WHEN W-CMD = "rule-archive" AND W-LOGGED-IN = "Y" PERFORM TOGGLE-RULE
+        WHEN W-CMD = "rule-book" AND W-LOGGED-IN = "Y" PERFORM BOOK-RULE
         WHEN W-CMD = "budget-save" AND W-LOGGED-IN = "Y"
             PERFORM DO-SAVE-BUDGET
         WHEN W-CMD = "budget-del" AND W-LOGGED-IN = "Y"
@@ -1066,6 +1097,8 @@ WRITE-TRANSACTION.
                 NOT AT END MOVE TRANS-ID TO W-LAST-ID
             END-READ
     END-START.
+    PERFORM RAISE-RESERVED-ID.
+    IF W-STORAGE-ERROR = "Y" CLOSE TRANSACTIONS-FILE EXIT PARAGRAPH END-IF.
     IF W-LAST-ID = 999999
         CLOSE TRANSACTIONS-FILE
         MOVE "Limita de tranzactii a fost atinsa." TO W-ERROR-MSG
@@ -1376,6 +1409,11 @@ DISPLAY-PAGE.
                         "</div><button class='btn secondary print' "
                         "type='button' data-print>Imprima raportul</button></header>"
                 PERFORM DISPLAY-REPORT-VIEW
+            WHEN "RECURRING"
+                DISPLAY "<header class='page-heading'><div><p class='eyebrow'>RITMUL FINANTELOR TALE</p>"
+                        "<h1>Planuri care se repeta.</h1><p>Pregateste salariul, chiria si abonamentele.</p>"
+                        "</div><a class='btn' href='#rule-form'>+ Regula recurenta</a></header>"
+                PERFORM DISPLAY-RECURRING-VIEW
             WHEN "BUDGET"
                 DISPLAY "<header class='page-heading'><div>"
                         "<p class='eyebrow'>PLANURI CARE PRIND CONTUR</p>"
@@ -1438,6 +1476,11 @@ DISPLAY-NOTICE.
             DISPLAY "<div class='notice' role='status'>Tranzactie stearsa.</div>"
         WHEN "budgeted"
             DISPLAY "<div class='notice' role='status'>Buget lunar salvat.</div>"
+        WHEN "ruledupe" DISPLAY "<div class='notice' role='status'>Regula era deja salvata.</div>"
+        WHEN "rulesave" DISPLAY "<div class='notice' role='status'>Regula recurenta salvata.</div>"
+        WHEN "rulemode" DISPLAY "<div class='notice' role='status'>Regula recurenta actualizata.</div>"
+        WHEN "booked" DISPLAY "<div class='notice' role='status'>Scadenta inregistrata o singura data.</div>"
+        WHEN "already" DISPLAY "<div class='notice' role='status'>Scadenta era deja inregistrata.</div>"
         WHEN "unbudget"
             DISPLAY "<div class='notice' role='status'>Limita de buget eliminata.</div>"
     END-EVALUATE.
@@ -1458,6 +1501,8 @@ PERFORM BUILD-NAV-QS.
             "<span aria-hidden='true'>&#8599;</span> Raport lunar</a>"
             "<a data-nav='BUDGET' href='?view=BUDGET'>"
             "<span aria-hidden='true'>&#9673;</span> Bugete</a>"
+            "<a data-nav='RECURRING' href='?view=RECURRING'>"
+            "<span aria-hidden='true'>&#8635;</span> Recurente</a>"
             "<a data-nav='AUDIT' href='?view=AUDIT'>"
             "<span aria-hidden='true'>&#9678;</span> Activitate</a></nav>"
             "<div class='sidebar-note'><span class='status-dot'></span>"
@@ -2580,3 +2625,6 @@ OPEN-LEDGER-FILE.
 
 CLOSE-LEDGER-FILE.
     CLOSE TRANSACTIONS-FILE.
+
+COPY "cobol/recurring-proc.cpy".
+COPY "cobol/recurring-ui.cpy".

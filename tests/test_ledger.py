@@ -29,7 +29,7 @@ def workdir(tmp_path_factory):
         shutil.copy2(tested_binary, wd / "ledger.cgi")
     else:
         subprocess.run(
-            ["cobc", "-x", "-free", os.path.join(ROOT, "ledger.cbl"),
+            ["cobc", "-x", "-free", "-I", ROOT, os.path.join(ROOT, "ledger.cbl"),
              os.path.join(ROOT, "sha256.cbl"),
              "-o", str(wd / "ledger.cgi")],
             check=True,
@@ -48,7 +48,8 @@ def client(workdir, monkeypatch):
     monkeypatch.delenv("LEDGER_PASS_HASH", raising=False)
     monkeypatch.delenv("LEDGER_SESSION_TTL", raising=False)
     for name in ("ledger.dat", "sessions.dat", "lockout.dat",
-                 "audit.log", "budgets.dat", "budgets.dat.1"):
+                 "audit.log", "budgets.dat", "budgets.dat.1", "recurring.dat", "recurring.dat.1", "occurrences.dat",
+                 "occurrences.dat.1", "occurrences.dat.2"):
         p = workdir / "data" / name
         if p.exists():
             p.unlink()
@@ -63,7 +64,13 @@ def client(workdir, monkeypatch):
     class SecureClient(FlaskClient):
         def post(self, *args, **kwargs):
             if kwargs.pop("csrf", True):
-                page = self.get("/", headers=kwargs.get("headers", {}))
+                fields = kwargs.get("data", {})
+                creating_rule = isinstance(fields, dict) and fields.get("cmd") == "rule-save" and not fields.get("id")
+                page = self.get("/?view=RECURRING" if creating_rule else "/", headers=kwargs.get("headers", {}))
+                if creating_rule and "create_key" not in fields:
+                    key = re.search(rb"name='create_key' value='([^']+)'", page.data)
+                    if key:
+                        kwargs["data"] = {**fields, "create_key": key[1].decode()}
                 match = re.search(rb"name='csrf_token' value='([^']+)'", page.data)
                 if match and isinstance(kwargs.get("data"), dict):
                     kwargs["data"] = {**kwargs["data"], "csrf_token": match[1].decode()}
@@ -653,3 +660,145 @@ def test_budget_requires_expense_category_and_month(client):
         data={"cmd": "budget-save", "cat": "Mancare", "amount": "100"})
     assert response.status_code == 400
     assert client.get("/?view=BUDGET&month=", headers=headers).status_code == 400
+
+
+def rule(client, headers, **overrides):
+    fields = {"cmd":"rule-save","date":"2026-01-31","cat":"Utilitati", "desc":"Abonament", "amount":"-40", "cycle":"MONTHLY"}
+    return client.post("/?view=RECURRING", headers=headers, data={**fields, **overrides})
+
+
+def book(client, headers, due="2026-01-31", id="000001"):
+    return client.post("/?view=RECURRING",headers=headers,data={"cmd":"rule-book","id":id,"due":due})
+
+
+def test_recurring_is_preview_until_booked(client):
+    _, headers=login(client)
+    response=rule(client,headers)
+    assert response.status_code==200 and b"Regula recurenta salvata" in response.data
+    assert b"Abonament" in response.data and b"2026-01-31" in response.data
+    assert b"Abonament" not in client.get("/?export=csv",headers=headers).data
+    response=book(client,headers)
+    assert response.status_code==200 and b"Scadenta inregistrata o singura data" in response.data
+    assert b"2026-02-28" in response.data
+    assert client.get("/?export=csv",headers=headers).data.count(b"Abonament")==1
+    assert b"Scadenta era deja inregistrata" in book(client,headers).data
+    assert client.get("/?export=csv",headers=headers).data.count(b"Abonament")==1
+    assert b"2026-03-31" in book(client,headers,due="2026-02-28").data
+
+
+def test_recurring_pause_edit_archive_preserves_ledger(client):
+    _,headers=login(client)
+    rule(client,headers)
+    client.post("/",headers=headers,data={"cmd":"rule-toggle","id":"000001"})
+    assert b"In pauza" in client.get("/?view=RECURRING",headers=headers).data
+    assert b"nu mai este disponibila" in book(client,headers).data
+    client.post("/",headers=headers,data={"cmd":"rule-toggle","id":"000001"})
+    rule(client,headers,id="000001",desc="Internet",amount="-80")
+    assert b"value='-80.00'" in client.get("/?view=RECURRING&rule=000001",headers=headers).data
+    book(client,headers)
+    before=client.get("/?export=csv",headers=headers).data
+    client.post("/",headers=headers,data={"cmd":"rule-archive","id":"000001"})
+    assert b"data-rule='000001'" not in client.get("/?view=RECURRING",headers=headers).data
+    assert before==client.get("/?export=csv",headers=headers).data
+
+
+def test_recurring_deletion_is_a_tombstone(client):
+    _,headers=login(client)
+    rule(client,headers);book(client,headers)
+    client.post("/",headers=headers,data={"cmd":"del","id":"000001"})
+    book(client,headers)
+    assert b"Abonament" not in client.get("/?export=csv",headers=headers).data
+    add(client,headers,"2026-01-31","Hobby","manual","1")
+    assert b"000002" in client.get("/?export=csv",headers=headers).data
+
+
+@pytest.mark.parametrize("cycle,start,next_date",[("WEEKLY","2026-01-31","2026-02-07"),("YEARLY","2024-02-29","2025-02-28")])
+def test_recurring_calendar(client,cycle,start,next_date):
+    _,headers=login(client)
+    rule(client,headers,cycle=cycle,date=start)
+    assert next_date.encode() in book(client,headers,due=start).data
+
+
+def test_recurring_future_and_invalid_forms(client):
+    _,headers=login(client)
+    assert b"Frecventa invalida" in rule(client,headers,cycle="BAD").data
+    assert b"diferita de zero" in rule(client,headers,amount="0").data
+    rule(client,headers,date="2099-01-01")
+    assert b"nu mai este disponibila" in book(client,headers,due="2099-01-01").data
+    assert b"Abonament" not in client.get("/?export=csv",headers=headers).data
+
+
+def test_recurring_auth_csrf_and_duplicate_requests(client):
+    assert b"<h2>Login</h2>" in rule(client,{}).data
+    _,headers=login(client)
+    assert client.post("/",csrf=False,headers=headers,data={"cmd":"rule-save"}).status_code==403
+    rule(client,headers)
+    from concurrent.futures import ThreadPoolExecutor
+    import app
+    def retry(_):
+        with app.app.test_client(use_cookies=False) as c:
+            assert book(c,headers).status_code==200
+    with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(retry,range(8)))
+    assert client.get("/?export=csv",headers=headers).data.count(b"Abonament")==1
+
+
+@pytest.mark.parametrize("fault",["after-intent","after-ledger","after-done"])
+def test_recurring_crash_recovery(client,workdir,fault):
+    from urllib.parse import urlencode
+    _,headers=login(client);rule(client,headers)
+    token=headers["Cookie"].split("=",1)[1]
+    data=urlencode({"cmd":"rule-book","id":"000001","due":"2026-01-31"}).encode()
+    env={"PATH":"/usr/bin:/bin","TZ":"UTC","REQUEST_METHOD":"POST","QUERY_STRING":"view=RECURRING", "HTTP_COOKIE":"session="+token,"CONTENT_LENGTH":str(len(data)),"LEDGER_USER":USER,"LEDGER_PASS":PASS, "LEDGER_TEST_FAULT":fault,"LEDGER_LOCAL_TODAY":"2026-11-03"}
+    crashed=subprocess.run([str(workdir/"ledger.cgi")],input=data,capture_output=True,cwd=workdir,env=env)
+    assert crashed.returncode==97,crashed.stderr
+    # A different action first must recover the committed intent before it allocates IDs.
+    add(client,headers,"2026-01-31","Hobby","manual","1")
+    response=book(client,headers)
+    assert response.status_code==200
+    exported=client.get("/?export=csv",headers=headers).data
+    assert exported.count(b"Abonament")==1 and exported.count(b"manual")==1
+    assert b"2026-02-28" in response.data
+
+
+def test_recurring_recovery_before_deleting_interrupted_occurrence(client,workdir):
+    from urllib.parse import urlencode
+    _,headers=login(client);rule(client,headers)
+    data=urlencode({"cmd":"rule-book","id":"000001","due":"2026-01-31"}).encode()
+    env={"PATH":"/usr/bin:/bin","REQUEST_METHOD":"POST","QUERY_STRING":"", "HTTP_COOKIE":"session="+headers["Cookie"].split("=",1)[1],"CONTENT_LENGTH":str(len(data)),"LEDGER_USER":USER,"LEDGER_PASS":PASS,"LEDGER_TEST_FAULT":"after-ledger"}
+    assert subprocess.run([str(workdir/"ledger.cgi")],input=data,capture_output=True,cwd=workdir,env=env).returncode==97
+    client.post("/",headers=headers,data={"cmd":"del","id":"000001"})
+    book(client,headers)
+    assert b"Abonament" not in client.get("/?export=csv",headers=headers).data
+
+
+def test_maintenance_gate_refuses_mutations(client,workdir):
+    _,headers=login(client)
+    gate=workdir/"data/.deploying";gate.touch()
+    try: assert add(client,headers,"2026-01-01","Hobby","not written","1").status_code==503
+    finally:gate.unlink()
+    assert b"not written" not in client.get("/?export=csv",headers=headers).data
+
+
+def test_repeated_rule_creation_remains_idempotent_after_booking(client):
+    _,headers=login(client)
+    key="a"*32
+    rule(client,headers,create_key=key)
+    book(client,headers)
+    response=rule(client,headers,create_key=key)
+    assert b"Regula era deja salvata" in response.data
+    assert response.data.count(b"data-rule=")==1
+    assert b"2026-02-28" in response.data
+
+
+def test_recurring_data_is_in_a_verified_backup(client,workdir,tmp_path):
+    import tarfile
+    _,headers=login(client);rule(client,headers);book(client,headers)
+    target=tmp_path/"recurring-snapshot"
+    subprocess.run([os.path.join(ROOT,"backup.sh")],check=True,capture_output=True,
+        env={**os.environ,"LEDGER_APP_DIR":str(workdir),"LEDGER_BACKUP_DIR":str(target)})
+    archive=next(target.glob("*.tar.gz"))
+    with tarfile.open(archive) as tar:
+        assert {"data/recurring.dat","data/occurrences.dat"}.issubset(tar.getnames())
+        assert "data/.ledger.lock" not in tar.getnames()
+        assert "data/.deploying" not in tar.getnames()
+    subprocess.run([sys.executable,os.path.join(ROOT,"ops/verify-backup.py"),str(archive)],check=True,capture_output=True)

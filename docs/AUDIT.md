@@ -160,3 +160,18 @@ Validarea acestei etape: 74 teste automate trecute; fluxul de bugete trecut în
 Chromium (salvare, actualizare, depășire, schimbare lună, eliminare și verificarea
 că tranzacțiile rămân), împreună cu regresiile desktop/mobile existente. Snapshot-ul
 cu bugete este extras și verificat offline. Nu au fost create bugete demo în producție.
+
+## Etapa 4.2 — recurente
+
+Reguli săptămânale/lunare/anuale cu previzualizare și confirmare individuală,
+editare, pauză/reluare și arhivare. Cheia de creare împiedică repetarea aceluiași
+formular. Un jurnal de intenții rezervă ID-ul înainte de scriere și păstrează
+scadențele finalizate inclusiv după ștergerea tranzacției. Testele injectează
+întreruperi după rezervare, după scriere și după finalizare; reîncercarea și o altă
+modificare recuperează fără duplicate. Detalii și limite: `ARCHITECTURE.md`.
+
+Validare: 88 teste pentru aplicație și snapshot-uri, plus două exerciții izolate de
+rollback (recuperare reușită și recuperare refuzată). Browser-ul verifică desktop și
+mobil, crearea/editarea regulii, confirmarea, replay, pauză/reluare și arhivarea.
+POST-urile sunt suspendate numai în timpul comutării release-ului; markerul tranzitoriu
+este exclus din backup. Flag-urile administrative/de test nu sunt transmise prin HTTP.

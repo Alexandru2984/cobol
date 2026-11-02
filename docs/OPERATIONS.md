@@ -120,3 +120,11 @@ Exercițiu efectuat în mediu izolat: token absent/reutilizat între sesiuni ref
 cereri concurente păstrate, proces blocat oprit și reap, CRUD/export verificate în browser.
 Verificarea restaurării offline este descrisă mai sus; răspunsul organizațional și
 notificările către utilizatori nu au fost simulate.
+
+## Recurente
+
+`recurring.dat` și `occurrences.dat` (plus indexurile lor `.dat.*`) se salvează și se
+restaurează împreună cu registrul. Confirmați fiecare scadență din interfață; nu există
+un job care să înregistreze automat bani. Descrierea recuperării și a rollback-ului
+este în `docs/ARCHITECTURE.md`. Nu ștergeți jurnalul de scadențe pentru a curăța lista.
+Arhivați regula din UI. Backup-ul verifică dinamic toate fișierele ISAM.

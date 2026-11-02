@@ -15,7 +15,7 @@ echo "1. Compilare Seed (Populare ISAM)..."
 cobc -x -free "$SRC_DIR/seed.cbl" -o seed
 
 echo "2. Compilare Ledger (Core logic)..."
-cobc -x -free "$SRC_DIR/ledger.cbl" "$SRC_DIR/sha256.cbl" -o ledger.cgi
+cobc -x -free -I "$SRC_DIR" "$SRC_DIR/ledger.cbl" "$SRC_DIR/sha256.cbl" -o ledger.cgi
 
 echo "3. Executie Populare Baza de Date..."
 ./seed

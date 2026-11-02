@@ -33,7 +33,7 @@ from pathlib import Path
 import sys, tarfile
 app = Path(sys.argv[1])
 def include(member):
-    if member.name == "data/.ledger.lock" or member.name == "data/backups" or member.name.startswith("data/backups/"):
+    if member.name in {"data/.ledger.lock", "data/.deploying"} or member.name == "data/backups" or member.name.startswith("data/backups/"):
         return None
     if not (member.isfile() or member.isdir()):
         raise RuntimeError("Snapshot refuses links and special files")

@@ -17,10 +17,10 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 SESSION_COOKIE = "__Host-ledger-session"
 CATEGORIES = {"Venituri", "Locuinta", "Mancare", "Hobby", "Utilitati"}
 FORM_LIMITS = {"cmd": 20, "user": 40, "pass": 40, "date": 10, "cat": 15,
-               "desc": 30, "amount": 20, "id": 6, "csrf_token": 300, "month": 7}
+               "desc": 30, "amount": 20, "id": 6, "csrf_token": 300, "month": 7, "cycle": 7, "due": 10, "create_key": 32}
 QUERY_LIMITS = {"filter": 15, "sort": 10, "from": 10, "to": 10,
                 "view": 10, "export": 3, "edit": 6, "q": 30, "page": 5, "notice": 8,
-                "kind": 7, "month": 7}
+                "kind": 7, "month": 7, "rule": 6}
 
 
 def parse_fields(raw, limits):
@@ -42,7 +42,7 @@ def parse_fields(raw, limits):
         if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
             abort(400, "Caractere de control nepermise.")
         fields[key] = value
-    for key in ("id", "edit", "page"):
+    for key in ("id", "edit", "page", "rule"):
         if fields.get(key) and not re.fullmatch(r"[0-9]+", fields[key]):
             abort(400, "ID sau pagina invalida.")
     if "month" in fields:
@@ -52,6 +52,8 @@ def parse_fields(raw, limits):
             date.fromisoformat(fields["month"] + "-01")
         except ValueError:
             abort(400, "Luna invalida.")
+    if "create_key" in fields and not re.fullmatch(r"[0-9a-f]{32}", fields["create_key"]):
+        abort(400, "Cheie de cerere invalida.")
     return fields
 
 

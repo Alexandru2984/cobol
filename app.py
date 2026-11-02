@@ -94,8 +94,10 @@ def index():
         form = parse_fields(request.get_data(), FORM_LIMITS)
         verify_csrf(app.config["SECRET_KEY"], session, form.pop("csrf_token", ""),
                     os.environ.get("LEDGER_PUBLIC_ORIGIN", "https://cobol.micutu.com"))
-        if form.get("cmd") not in {"login", "logout", "add", "update", "del", "budget-save", "budget-del"}:
+        if form.get("cmd") not in {"login", "logout", "add", "update", "del", "budget-save", "budget-del", "rule-save", "rule-toggle", "rule-archive", "rule-book"}:
             abort(400, "Comanda invalida.")
+        if Path(WORK_DIR, "data", ".deploying").exists():
+            abort(503, "Actualizare in curs. Reincearca in cateva secunde.")
         if form["cmd"] in {"budget-save", "budget-del"} and "month" not in form:
             abort(400, "Luna este obligatorie.")
     # Never forward the host process environment or unverified client cookies.
@@ -111,6 +113,7 @@ def index():
         "LEDGER_CSRF_TOKEN": csrf_token(app.config["SECRET_KEY"], session),
         "LEDGER_AUTH_MODE": "legacy", "LEDGER_AUTH_VERIFIED": "N",
         "LEDGER_NOTICE": query.get("notice", ""),
+        "LEDGER_RULE_KEY": secrets.token_hex(16),
         "LEDGER_LOCAL_TODAY": datetime.now(ZoneInfo(
             os.environ.get("LEDGER_TIMEZONE", "Europe/Bucharest"))).date().isoformat(),
     })
@@ -174,13 +177,15 @@ def cgi_response(stdout, current_csrf, form):
             new_session = value.split(";", 1)[0].split("=", 1)[1]
             response.set_data(response.get_data(as_text=True).replace(
                 current_csrf, csrf_token(app.config["SECRET_KEY"], new_session)))
-    if request.method == "POST" and result in {"added", "updated", "deleted", "login", "logout", "budgeted", "unbudget"}:
+    if response.status_code < 400 and request.method == "POST" and result in {"added", "updated", "deleted", "login", "logout", "budgeted", "unbudget", "rulesave", "rulemode", "booked", "already", "ruledupe"}:
         target = {key: value for key, value in request.args.items()
                   if key in QUERY_LIMITS and key not in {"edit", "export", "notice"}}
         if result in {"added", "updated", "deleted"}:
             target["notice"] = result
         if result in {"budgeted", "unbudget"}:
             target = {"view": "BUDGET", "month": form["month"], "notice": result}
+        if result in {"rulesave", "rulemode", "booked", "already", "ruledupe"}:
+            target = {"view": "RECURRING", "notice": result}
         if result in {"login", "logout"}:
             target = {}
         response.status_code = 303

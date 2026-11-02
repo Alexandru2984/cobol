@@ -14,7 +14,7 @@ artifacts.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="ledger-browser-") as scratch:
     work = Path(scratch)
     (work / "data").mkdir(mode=0o700)
-    subprocess.run(["cobc", "-x", "-free", str(root / "ledger.cbl"), str(root / "sha256.cbl"),
+    subprocess.run(["cobc", "-x", "-free", "-I", str(root), str(root / "ledger.cbl"), str(root / "sha256.cbl"),
                     "-o", str(work / "ledger.cgi")], check=True)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
