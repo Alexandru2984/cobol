@@ -21,10 +21,10 @@ if (( EUID == 0 )); then
     chown --reference="$DATA_DIR" "/proc/$$/fd/9"
 fi
 flock -x -w 30 9
-for database in ledger.dat ledger.dat.1 sessions.dat lockout.dat; do
-    if [[ -e $DATA_DIR/$database ]]; then
-        [[ -f $DATA_DIR/$database && ! -L $DATA_DIR/$database ]] || exit 2
-        db5.3_verify -q "$DATA_DIR/$database"
+for database in "$DATA_DIR"/*.dat*; do
+    if [[ -e $database ]]; then
+        [[ -f $database && ! -L $database ]] || exit 2
+        db5.3_verify -q "$database"
     fi
 done
 # Python's tarfile avoids GNU tar/openat2 incompatibility with RestrictSUIDSGID.
@@ -48,9 +48,9 @@ import sys, tarfile
 with tarfile.open(sys.argv[1]) as archive:
     archive.extractall(sys.argv[2], filter="data")
 PYEXTRACT
-for database in ledger.dat ledger.dat.1 sessions.dat lockout.dat; do
-    if [[ -f $staging/data/$database ]]; then
-        db5.3_verify -q "$staging/data/$database"
+for database in "$staging/data"/*.dat*; do
+    if [[ -f $database ]]; then
+        db5.3_verify -q "$database"
     fi
 done
 (cd -- "$staging" && sha256sum "$name" > "$name.sha256")

@@ -94,8 +94,10 @@ def index():
         form = parse_fields(request.get_data(), FORM_LIMITS)
         verify_csrf(app.config["SECRET_KEY"], session, form.pop("csrf_token", ""),
                     os.environ.get("LEDGER_PUBLIC_ORIGIN", "https://cobol.micutu.com"))
-        if form.get("cmd") not in {"login", "logout", "add", "update", "del"}:
+        if form.get("cmd") not in {"login", "logout", "add", "update", "del", "budget-save", "budget-del"}:
             abort(400, "Comanda invalida.")
+        if form["cmd"] in {"budget-save", "budget-del"} and "month" not in form:
+            abort(400, "Luna este obligatorie.")
     # Never forward the host process environment or unverified client cookies.
     env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TZ": "UTC"}
     for key in ("LEDGER_USER", "LEDGER_PASS", "LEDGER_PASS_HASH", "LEDGER_SESSION_TTL"):
@@ -144,10 +146,10 @@ def index():
         abort(502, "Backend-ul a esuat.")
     if stderr:
         logger.warning("backend_stderr request=%s bytes=%s", g.request_id, len(stderr))
-    return cgi_response(stdout, env["LEDGER_CSRF_TOKEN"])
+    return cgi_response(stdout, env["LEDGER_CSRF_TOKEN"], form)
 
 
-def cgi_response(stdout, current_csrf):
+def cgi_response(stdout, current_csrf, form):
     raw = stdout.decode("utf-8", errors="replace")
     separator = next((sep for sep in ("\r\n\r\n", "\n\n", "\n \n") if sep in raw), None)
     if not separator:
@@ -172,11 +174,13 @@ def cgi_response(stdout, current_csrf):
             new_session = value.split(";", 1)[0].split("=", 1)[1]
             response.set_data(response.get_data(as_text=True).replace(
                 current_csrf, csrf_token(app.config["SECRET_KEY"], new_session)))
-    if request.method == "POST" and result in {"added", "updated", "deleted", "login", "logout"}:
+    if request.method == "POST" and result in {"added", "updated", "deleted", "login", "logout", "budgeted", "unbudget"}:
         target = {key: value for key, value in request.args.items()
                   if key in QUERY_LIMITS and key not in {"edit", "export", "notice"}}
         if result in {"added", "updated", "deleted"}:
             target["notice"] = result
+        if result in {"budgeted", "unbudget"}:
+            target = {"view": "BUDGET", "month": form["month"], "notice": result}
         if result in {"login", "logout"}:
             target = {}
         response.status_code = 303

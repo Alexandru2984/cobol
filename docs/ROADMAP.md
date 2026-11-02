@@ -23,21 +23,20 @@ health și smoke checks pe domeniul public. Commit distinct după fiecare etapă
 
 ## Etapa 4: extinderi propuse, în ordinea utilității
 
-1. Bugete lunare pe categorie cu progres și praguri configurabile.
-2. Tranzacții recurente cu previzualizare și evitare de duplicate.
-3. Import CSV cu mapare, validare, previzualizare și rollback integral.
-4. Conturi multiple, transferuri și reconciliere sold bancar.
-5. Categorii editabile, etichete și reguli automate de clasificare.
-6. Obiective de economisire și prognoză de cash flow.
-7. Comparații lună/an, distribuția cheltuielilor și raport anual exportabil.
-8. Gestionarea sesiunilor active și revocare globală; TOTP/passkeys.
-9. Istoric de modificări și recuperare tranzacții șterse.
-10. Monede multiple cu rată explicită, fără conversii ascunse.
-11. Export JSON și API autentificat, cu permisiuni separate.
-12. PWA instalabilă; cache doar pentru assets, niciodată date financiare.
-13. Cont Unix dedicat, directoare release și backup criptat în afara VPS-ului.
-14. Alerte efective pentru erori, login suspect, spațiu disc și backup expirat.
-15. Documentație utilizator, demo public izolat și teste de accesibilitate.
+1. Tranzacții recurente cu previzualizare și evitare de duplicate.
+2. Import CSV cu mapare, validare, previzualizare și rollback integral.
+3. Conturi multiple, transferuri și reconciliere sold bancar.
+4. Categorii editabile, etichete și reguli automate de clasificare.
+5. Obiective de economisire și prognoză de cash flow.
+6. Comparații lună/an, distribuția cheltuielilor și raport anual exportabil.
+7. Gestionarea sesiunilor active și revocare globală; TOTP/passkeys.
+8. Istoric de modificări și recuperare tranzacții șterse.
+9. Monede multiple cu rată explicită, fără conversii ascunse.
+10. Export JSON și API autentificat, cu permisiuni separate.
+11. PWA instalabilă; cache doar pentru assets, niciodată date financiare.
+12. Cont Unix dedicat, directoare release și backup criptat în afara VPS-ului.
+13. Alerte efective pentru erori, login suspect, spațiu disc și backup expirat.
+14. Documentație utilizator, demo public izolat și teste de accesibilitate.
 
 Etapa 4 este backlog, nu funcționalitate livrată. Funcțiile care schimbă schema ISAM
 necesită migrare versionată și test de restaurare înainte de activare. Multi-user
@@ -55,4 +54,12 @@ Europe/Bucharest; expirarea sesiunilor se calculează în UTC.
 Etapa 3 este activă în producție: releases cu runtime asociat, rollback verificat,
 backup cu flock și probă de restaurare offline, configurații versionate și runbook.
 Urmează prioritar: rotație scrypt, identitate Unix dedicată, copie offsite/alerte,
-apoi bugete, recurente și import CSV cu previzualizare.
+apoi recurente și import CSV cu previzualizare.
+
+
+## Etapa 4.1 livrată: bugete lunare
+
+Limite pe cele patru categorii de cheltuieli, progres și avertizare la 80% / depășire,
+planificat/cheltuit/disponibil/fără buget, navigare între luni, modificare și eliminare
+cu confirmare. Stocare ISAM separată și inclusă în backup. Veniturile nu se scad din
+cheltuielile urmărite. Eliminarea unei limite nu modifică tranzacțiile.

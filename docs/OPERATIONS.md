@@ -4,7 +4,9 @@
 
 - Repo: `/srv/canary/cobol.micutu.com/app`, GitHub `Alexandru2984/cobol`.
 - Cod activ și binar: symlink atomic `../current` spre un folder din `../releases`.
-- Date: `app/data/`; formatul ISAM al înregistrărilor este păstrat.
+- Date: `app/data/`; formatul ISAM al tranzacțiilor este păstrat.
+- Bugete: `data/budgets.dat`, cheie lună + categorie, creat la prima salvare.
+  Backup-ul verifică toate fișierele `*.dat*`, inclusiv fișierele noi.
 - Python: `../current/runtime` pointează spre mediul versionat al release-ului; serviciu: `cobol-canary.service`, loopback port 9001.
 - Traseu verificat: Cloudflare → vhost nginx → gunicorn → binar COBOL → ISAM.
   Mai există nginx-uri pentru alte aplicații; nu sunt un al doilea backend al acestui proiect.

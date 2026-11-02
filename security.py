@@ -1,5 +1,6 @@
 """HTTP trust boundary for the fixed-width COBOL CGI protocol."""
 from contextlib import contextmanager
+from datetime import date
 import fcntl
 import hashlib
 import hmac
@@ -16,10 +17,10 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 SESSION_COOKIE = "__Host-ledger-session"
 CATEGORIES = {"Venituri", "Locuinta", "Mancare", "Hobby", "Utilitati"}
 FORM_LIMITS = {"cmd": 20, "user": 40, "pass": 40, "date": 10, "cat": 15,
-               "desc": 30, "amount": 20, "id": 6, "csrf_token": 300}
+               "desc": 30, "amount": 20, "id": 6, "csrf_token": 300, "month": 7}
 QUERY_LIMITS = {"filter": 15, "sort": 10, "from": 10, "to": 10,
                 "view": 10, "export": 3, "edit": 6, "q": 30, "page": 5, "notice": 8,
-                "kind": 7}
+                "kind": 7, "month": 7}
 
 
 def parse_fields(raw, limits):
@@ -44,6 +45,13 @@ def parse_fields(raw, limits):
     for key in ("id", "edit", "page"):
         if fields.get(key) and not re.fullmatch(r"[0-9]+", fields[key]):
             abort(400, "ID sau pagina invalida.")
+    if "month" in fields:
+        try:
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}", fields["month"]):
+                raise ValueError
+            date.fromisoformat(fields["month"] + "-01")
+        except ValueError:
+            abort(400, "Luna invalida.")
     return fields
 
 

@@ -23,6 +23,12 @@ FILE-CONTROL.
         RECORD KEY IS LOCK-IP
         FILE STATUS IS FS-LOCKOUT.
 
+    SELECT BUDGETS-FILE ASSIGN TO "data/budgets.dat"
+        ORGANIZATION IS INDEXED
+        ACCESS MODE IS DYNAMIC
+        RECORD KEY IS BUDGET-KEY
+        FILE STATUS IS FS-BUDGETS.
+
     SELECT OPTIONAL AUDIT-FILE ASSIGN TO "data/audit.log"
         ORGANIZATION IS LINE SEQUENTIAL
         FILE STATUS IS FS-AUDIT.
@@ -49,6 +55,13 @@ FD  LOCKOUT-FILE.
     05  LOCK-FAILS          PIC 9(3).
     05  LOCK-WIN-EXP        PIC 9(12).
 
+FD  BUDGETS-FILE.
+01  BUDGET-RECORD.
+    05  BUDGET-KEY.
+        10  BUDGET-MONTH    PIC X(7).
+        10  BUDGET-CAT      PIC X(15).
+    05  BUDGET-AMOUNT       PIC 9(7)V99.
+
 FD  AUDIT-FILE.
 01  AUDIT-REC               PIC X(160).
 
@@ -57,6 +70,22 @@ WORKING-STORAGE SECTION.
 01  FS-SESSIONS             PIC XX.
 01  FS-LOCKOUT              PIC XX.
 01  FS-AUDIT                PIC XX.
+01  FS-BUDGETS              PIC XX.
+01  W-BUDGET-MONTH          PIC X(7).
+01  W-BUDGET-START          PIC X(10).
+01  W-BUDGET-CAT            PIC X(15).
+01  W-BUDGET-AMOUNT         PIC 9(7)V99.
+01  W-BUDGET-PLANNED        PIC 9(15)V99 VALUE 0.
+01  W-BUDGET-SPENT          PIC 9(15)V99 VALUE 0.
+01  W-BUDGET-UNCOVERED      PIC 9(15)V99 VALUE 0.
+01  W-BUDGET-ACTUAL         PIC 9(15)V99 VALUE 0.
+01  W-BUDGET-ERROR          PIC X VALUE "N".
+01  W-STORAGE-ERROR         PIC X VALUE "N".
+01  W-FILE-EXISTS           USAGE BINARY-LONG SIGNED.
+01  W-BUDGET-PCT            PIC 9(3) VALUE 0.
+01  W-BUDGET-PCT-D          PIC ZZ9.
+01  W-BUDGET-LIMIT-D        PIC -------9.99.
+01  W-BUDGET-REMAINING      PIC S9(15)V99.
 01  W-EOF                   PIC X VALUE "N".
 01  W-DISPLAY-AMOUNT        PIC --,---,--9.99.
 01  W-TOTAL-BALANCE         PIC S9(15)V99 VALUE 0.
@@ -262,6 +291,8 @@ WORKING-STORAGE SECTION.
     05  CAT-ENTRY           OCCURS 5 TIMES INDEXED BY CAT-IDX.
         10  CAT-NAME        PIC X(15).
         10  CAT-TOTAL       PIC S9(15)V99.
+        10  CAT-LIMIT       PIC 9(7)V99 VALUE 0.
+        10  CAT-BUDGETED    PIC X VALUE "N".
 
 01  W-INCOME                PIC S9(15)V99 VALUE 0.
 01  W-EXPENSE               PIC S9(15)V99 VALUE 0.
@@ -288,7 +319,11 @@ MAIN-LOGIC.
         PERFORM PARSE-POST-BODY
         PERFORM HANDLE-ACTION
     END-IF.
-    IF W-LOGGED-IN = "Y" AND W-EXPORT = "Y"
+    IF W-LOGGED-IN = "Y" PERFORM CHECK-LEDGER-STORAGE END-IF.
+    IF W-LOGGED-IN = "Y" AND W-VIEW = "BUDGET" AND W-STORAGE-ERROR NOT = "Y"
+        PERFORM LOAD-BUDGET-DATA
+    END-IF.
+    IF W-LOGGED-IN = "Y" AND W-EXPORT = "Y" AND W-STORAGE-ERROR NOT = "Y"
         PERFORM EXPORT-CSV
     ELSE
         PERFORM DISPLAY-PAGE
@@ -343,6 +378,7 @@ LOAD-CONFIG.
     IF W-LOCAL-TODAY NOT = SPACES AND LOW-VALUES
         MOVE W-LOCAL-TODAY TO W-TODAY-STR
     END-IF.
+    MOVE W-TODAY-STR(1:7) TO W-BUDGET-MONTH.
     PERFORM COMPUTE-ABS-NOW.
 
 READ-CGI-ENV.
@@ -374,6 +410,9 @@ CHECK-SESSION.
     END-IF.
     OPEN I-O SESSIONS-FILE.
     IF FS-SESSIONS NOT = "00"
+        CALL STATIC "access" USING BY REFERENCE Z"data/sessions.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0 PERFORM NATIVE-STORAGE-ERROR END-IF
         EXIT PARAGRAPH
     END-IF.
     MOVE W-COOKIE-TOKEN TO SESS-TOKEN.
@@ -409,6 +448,8 @@ PARSE-QUERY-STRING.
             MOVE W-PAIR-VAL TO W-URL-IN
             PERFORM URL-DECODE
             EVALUATE W-PAIR-KEY
+                WHEN "month"
+                    MOVE W-URL-OUT TO W-BUDGET-MONTH
                 WHEN "kind"
                     MOVE W-URL-OUT TO W-KIND
                 WHEN "filter"
@@ -703,6 +744,10 @@ HANDLE-ACTION.
             IF W-LOGGED-IN = "Y"
                 PERFORM DO-LOGOUT
             END-IF
+        WHEN W-CMD = "budget-save" AND W-LOGGED-IN = "Y"
+            PERFORM DO-SAVE-BUDGET
+        WHEN W-CMD = "budget-del" AND W-LOGGED-IN = "Y"
+            PERFORM DO-DELETE-BUDGET
         WHEN W-CMD = "update" AND W-LOGGED-IN = "Y"
             PERFORM DO-UPDATE
         WHEN W-CMD = "add" AND W-LOGGED-IN = "Y"
@@ -722,6 +767,7 @@ DO-LOGIN.
     MOVE W-VALUE-OUT(1:40) TO W-LOGIN-PASS.
 
     PERFORM CHECK-LOCKOUT.
+    IF W-STORAGE-ERROR = "Y" EXIT PARAGRAPH END-IF.
     IF W-LOCKED = "Y"
         MOVE "Prea multe incercari esuate. Reincearca in 15 minute."
             TO W-ERROR-MSG
@@ -804,11 +850,20 @@ STORE-SESSION.
     MOVE "N" TO W-SESSION-STORED.
     OPEN I-O SESSIONS-FILE.
     IF FS-SESSIONS = "35"
+        CALL STATIC "access" USING BY REFERENCE Z"data/sessions.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0
+            PERFORM NATIVE-STORAGE-ERROR
+            EXIT PARAGRAPH
+        END-IF
         OPEN OUTPUT SESSIONS-FILE
         CLOSE SESSIONS-FILE
         OPEN I-O SESSIONS-FILE
     END-IF.
     IF FS-SESSIONS NOT = "00"
+        CALL STATIC "access" USING BY REFERENCE Z"data/sessions.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0 PERFORM NATIVE-STORAGE-ERROR END-IF
         EXIT PARAGRAPH
     END-IF.
     PERFORM PURGE-EXPIRED-SESSIONS.
@@ -844,6 +899,9 @@ CHECK-LOCKOUT.
     MOVE "N" TO W-LOCKED.
     OPEN I-O LOCKOUT-FILE.
     IF FS-LOCKOUT NOT = "00"
+        CALL STATIC "access" USING BY REFERENCE Z"data/lockout.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0 PERFORM NATIVE-STORAGE-ERROR END-IF
         EXIT PARAGRAPH
     END-IF.
     MOVE W-REMOTE-ADDR TO LOCK-IP.
@@ -863,11 +921,20 @@ CHECK-LOCKOUT.
 RECORD-LOGIN-FAIL.
     OPEN I-O LOCKOUT-FILE.
     IF FS-LOCKOUT = "35"
+        CALL STATIC "access" USING BY REFERENCE Z"data/lockout.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0
+            PERFORM NATIVE-STORAGE-ERROR
+            EXIT PARAGRAPH
+        END-IF
         OPEN OUTPUT LOCKOUT-FILE
         CLOSE LOCKOUT-FILE
         OPEN I-O LOCKOUT-FILE
     END-IF.
     IF FS-LOCKOUT NOT = "00"
+        CALL STATIC "access" USING BY REFERENCE Z"data/lockout.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0 PERFORM NATIVE-STORAGE-ERROR END-IF
         EXIT PARAGRAPH
     END-IF.
     MOVE W-REMOTE-ADDR TO LOCK-IP.
@@ -895,6 +962,9 @@ RECORD-LOGIN-FAIL.
 CLEAR-LOCKOUT.
     OPEN I-O LOCKOUT-FILE.
     IF FS-LOCKOUT NOT = "00"
+        CALL STATIC "access" USING BY REFERENCE Z"data/lockout.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0 PERFORM NATIVE-STORAGE-ERROR END-IF
         EXIT PARAGRAPH
     END-IF.
     MOVE W-REMOTE-ADDR TO LOCK-IP.
@@ -971,6 +1041,12 @@ DO-ADD.
 WRITE-TRANSACTION.
     OPEN I-O TRANSACTIONS-FILE.
     IF FS-LEDGER = "35"
+        CALL STATIC "access" USING BY REFERENCE Z"data/ledger.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0
+            PERFORM NATIVE-STORAGE-ERROR
+            EXIT PARAGRAPH
+        END-IF
         OPEN OUTPUT TRANSACTIONS-FILE
         CLOSE TRANSACTIONS-FILE
         OPEN I-O TRANSACTIONS-FILE
@@ -1234,8 +1310,15 @@ VALIDATE-DATE.
         STRING W-DATE-RAW(1:4) W-DATE-RAW(6:2)
                W-DATE-RAW(9:2) INTO W-DATE-NUM
         END-STRING
-        IF FUNCTION TEST-DATE-YYYYMMDD(W-DATE-NUM) NOT = 0
+        IF W-DATE-RAW(1:4) = "0000"
             MOVE "N" TO W-VALID
+        ELSE
+*> Gregorian dates repeat every 400 years. GnuCOBOL's intrinsic starts
+*> at 1601, so validate earlier dates in the equivalent 1600-year cycle.
+            IF W-DATE-NUM < 16010101 ADD 16000000 TO W-DATE-NUM END-IF
+            IF FUNCTION TEST-DATE-YYYYMMDD(W-DATE-NUM) NOT = 0
+                MOVE "N" TO W-VALID
+            END-IF
         END-IF
     END-IF.
 
@@ -1251,7 +1334,10 @@ VALIDATE-CATEGORY.
     END-EVALUATE.
 
 DISPLAY-PAGE.
-DISPLAY "Content-type: text/html; charset=utf-8".
+    IF W-STORAGE-ERROR = "Y"
+        DISPLAY "Status: 503 Service Unavailable"
+    END-IF.
+    DISPLAY "Content-type: text/html; charset=utf-8".
     IF W-RESULT NOT = SPACES
         DISPLAY "X-Ledger-Result: " FUNCTION TRIM(W-RESULT)
     END-IF.
@@ -1280,6 +1366,7 @@ DISPLAY "Content-type: text/html; charset=utf-8".
         PERFORM DISPLAY-HEADER
         DISPLAY "<main id='main' class='workspace' tabindex='-1'>"
         PERFORM DISPLAY-NOTICE
+        IF W-STORAGE-ERROR NOT = "Y"
         EVALUATE FUNCTION TRIM(W-VIEW)
             WHEN "REPORT"
                 DISPLAY "<header class='page-heading'><div>"
@@ -1289,6 +1376,13 @@ DISPLAY "Content-type: text/html; charset=utf-8".
                         "</div><button class='btn secondary print' "
                         "type='button' data-print>Imprima raportul</button></header>"
                 PERFORM DISPLAY-REPORT-VIEW
+            WHEN "BUDGET"
+                DISPLAY "<header class='page-heading'><div>"
+                        "<p class='eyebrow'>PLANURI CARE PRIND CONTUR</p>"
+                        "<h1>Da-le banilor o directie.</h1>"
+                        "<p>Limite lunare clare, pentru fiecare categorie.</p>"
+                        "</div></header>"
+                PERFORM DISPLAY-BUDGET-VIEW
             WHEN "AUDIT"
                 DISPLAY "<header class='page-heading'><div>"
                         "<p class='eyebrow'>TRANSPARENTA</p><h1>Activitatea ta.</h1>"
@@ -1304,6 +1398,7 @@ DISPLAY "Content-type: text/html; charset=utf-8".
                         "+ Adauga tranzactie</a></header>"
                 PERFORM DISPLAY-LEDGER-VIEW
         END-EVALUATE
+        END-IF
         DISPLAY "<footer class='page-footer'><span>LEDGER OF AGES</span>"
                 "<span>Construit in COBOL. Folosit in prezent.</span>"
                 "<button type='button' data-help>Scurtaturi tastatura</button>"
@@ -1341,6 +1436,10 @@ DISPLAY-NOTICE.
             DISPLAY "<div class='notice' role='status'>Tranzactie actualizata.</div>"
         WHEN "deleted"
             DISPLAY "<div class='notice' role='status'>Tranzactie stearsa.</div>"
+        WHEN "budgeted"
+            DISPLAY "<div class='notice' role='status'>Buget lunar salvat.</div>"
+        WHEN "unbudget"
+            DISPLAY "<div class='notice' role='status'>Limita de buget eliminata.</div>"
     END-EVALUATE.
 
 DISPLAY-HEADER.
@@ -1357,6 +1456,8 @@ PERFORM BUILD-NAV-QS.
             "<a data-nav='REPORT' href='?view=REPORT&amp;"
             FUNCTION TRIM(W-QS) "'>"
             "<span aria-hidden='true'>&#8599;</span> Raport lunar</a>"
+            "<a data-nav='BUDGET' href='?view=BUDGET'>"
+            "<span aria-hidden='true'>&#9673;</span> Bugete</a>"
             "<a data-nav='AUDIT' href='?view=AUDIT'>"
             "<span aria-hidden='true'>&#9678;</span> Activitate</a></nav>"
             "<div class='sidebar-note'><span class='status-dot'></span>"
@@ -1963,6 +2064,322 @@ CSV-ESCAPE.
         MOVE W-CSV-IN(W-CSV-I:1) TO W-CSV-OUT(W-CSV-OUT-LEN:1)
     END-PERFORM.
 
+
+VALIDATE-BUDGET-MONTH.
+    MOVE "N" TO W-VALID.
+    IF FUNCTION LENGTH(FUNCTION TRIM(W-BUDGET-MONTH)) NOT = 7
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE SPACES TO W-DATE-RAW.
+    STRING W-BUDGET-MONTH "-01" INTO W-DATE-RAW END-STRING.
+    PERFORM VALIDATE-DATE.
+
+READ-BUDGET-FORM.
+    MOVE "BUDGET" TO W-VIEW.
+    MOVE "month" TO W-KEY-LOOKUP.
+    PERFORM GET-FORM-VALUE.
+    MOVE W-VALUE-OUT TO W-BUDGET-MONTH.
+    PERFORM VALIDATE-BUDGET-MONTH.
+    IF W-VALID NOT = "Y"
+        MOVE "Luna invalida. Foloseste formatul YYYY-MM." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE "cat" TO W-KEY-LOOKUP.
+    PERFORM GET-FORM-VALUE.
+    MOVE W-VALUE-OUT TO W-CAT-RAW W-BUDGET-CAT.
+    PERFORM VALIDATE-CATEGORY.
+    IF W-VALID NOT = "Y" OR W-BUDGET-CAT = "Venituri"
+        MOVE "Alege o categorie de cheltuieli pentru buget." TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+    END-IF.
+
+DO-SAVE-BUDGET.
+    PERFORM READ-BUDGET-FORM.
+    IF W-HAS-ERROR = "Y" EXIT PARAGRAPH END-IF.
+    MOVE "amount" TO W-KEY-LOOKUP.
+    PERFORM GET-FORM-VALUE.
+    MOVE W-VALUE-OUT TO W-AMOUNT-RAW.
+    PERFORM VALIDATE-AMOUNT.
+    IF W-VALID NOT = "Y" OR W-AMOUNT-NUM <= 0
+        MOVE "Buget invalid. Alege o suma pozitiva cu cel mult doua zecimale."
+            TO W-ERROR-MSG
+        MOVE "Y" TO W-HAS-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE W-AMOUNT-NUM TO W-BUDGET-AMOUNT.
+    OPEN I-O BUDGETS-FILE.
+    IF FS-BUDGETS = "35"
+        CALL STATIC "access" USING BY REFERENCE Z"data/budgets.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0
+            PERFORM NATIVE-STORAGE-ERROR
+            EXIT PARAGRAPH
+        END-IF
+        OPEN OUTPUT BUDGETS-FILE
+        CLOSE BUDGETS-FILE
+        OPEN I-O BUDGETS-FILE
+    END-IF.
+    IF FS-BUDGETS NOT = "00"
+        PERFORM BUDGET-STORAGE-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE W-BUDGET-MONTH TO BUDGET-MONTH.
+    MOVE W-BUDGET-CAT TO BUDGET-CAT.
+    READ BUDGETS-FILE
+        INVALID KEY
+            MOVE W-BUDGET-AMOUNT TO BUDGET-AMOUNT
+            WRITE BUDGET-RECORD END-WRITE
+        NOT INVALID KEY
+            MOVE W-BUDGET-AMOUNT TO BUDGET-AMOUNT
+            REWRITE BUDGET-RECORD END-REWRITE
+    END-READ.
+    IF FS-BUDGETS = "00"
+        MOVE "budgeted" TO W-RESULT
+        MOVE "BUDGET" TO W-AUDIT-ACTION
+        MOVE SPACES TO W-AUDIT-DETAIL
+        STRING "month=" W-BUDGET-MONTH " cat="
+            FUNCTION TRIM(W-BUDGET-CAT) " limit=" W-BUDGET-AMOUNT
+            INTO W-AUDIT-DETAIL END-STRING
+        PERFORM WRITE-AUDIT
+    ELSE
+        PERFORM BUDGET-STORAGE-ERROR
+    END-IF.
+    CLOSE BUDGETS-FILE.
+
+DO-DELETE-BUDGET.
+    PERFORM READ-BUDGET-FORM.
+    IF W-HAS-ERROR = "Y" EXIT PARAGRAPH END-IF.
+    OPEN I-O BUDGETS-FILE.
+    IF FS-BUDGETS NOT = "00"
+        PERFORM BUDGET-STORAGE-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    MOVE W-BUDGET-MONTH TO BUDGET-MONTH.
+    MOVE W-BUDGET-CAT TO BUDGET-CAT.
+    READ BUDGETS-FILE
+        INVALID KEY
+            MOVE "Nu exista un buget pentru aceasta categorie si luna."
+                TO W-ERROR-MSG
+            MOVE "Y" TO W-HAS-ERROR
+        NOT INVALID KEY
+            DELETE BUDGETS-FILE RECORD END-DELETE
+            IF FS-BUDGETS = "00"
+                MOVE "unbudget" TO W-RESULT
+                MOVE "BUDGET-DEL" TO W-AUDIT-ACTION
+                MOVE SPACES TO W-AUDIT-DETAIL
+                STRING "month=" W-BUDGET-MONTH " cat="
+                    FUNCTION TRIM(W-BUDGET-CAT)
+                    INTO W-AUDIT-DETAIL END-STRING
+                PERFORM WRITE-AUDIT
+            ELSE
+                PERFORM BUDGET-STORAGE-ERROR
+            END-IF
+    END-READ.
+    CLOSE BUDGETS-FILE.
+
+
+CHECK-LEDGER-STORAGE.
+    OPEN INPUT TRANSACTIONS-FILE.
+    EVALUATE FS-LEDGER
+        WHEN "00" CLOSE TRANSACTIONS-FILE
+        WHEN "35"
+            CALL STATIC "access" USING BY REFERENCE Z"data/ledger.dat"
+                BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+            IF W-FILE-EXISTS = 0 PERFORM NATIVE-STORAGE-ERROR END-IF
+        WHEN OTHER PERFORM NATIVE-STORAGE-ERROR
+    END-EVALUATE.
+
+NATIVE-STORAGE-ERROR.
+    MOVE "Datele nu pot fi accesate in siguranta. Contacteaza administratorul."
+        TO W-ERROR-MSG.
+    MOVE "Y" TO W-HAS-ERROR W-STORAGE-ERROR.
+
+BUDGET-STORAGE-ERROR.
+    MOVE "Bugetele nu pot fi accesate. Incearca mai tarziu." TO W-ERROR-MSG.
+    MOVE "Y" TO W-HAS-ERROR.
+    MOVE "Y" TO W-BUDGET-ERROR W-STORAGE-ERROR.
+
+LOAD-BUDGET-DATA.
+    PERFORM VALIDATE-BUDGET-MONTH.
+    IF W-VALID NOT = "Y"
+        PERFORM BUDGET-STORAGE-ERROR
+        EXIT PARAGRAPH
+    END-IF.
+    PERFORM INITIALIZE-SUMMARY.
+    PERFORM VARYING CAT-IDX FROM 1 BY 1 UNTIL CAT-IDX > 5
+        MOVE 0 TO CAT-LIMIT(CAT-IDX)
+        MOVE "N" TO CAT-BUDGETED(CAT-IDX)
+    END-PERFORM.
+    OPEN INPUT BUDGETS-FILE.
+    IF FS-BUDGETS = "00"
+        PERFORM VARYING CAT-IDX FROM 2 BY 1 UNTIL CAT-IDX > 5
+            MOVE W-BUDGET-MONTH TO BUDGET-MONTH
+            MOVE CAT-NAME(CAT-IDX) TO BUDGET-CAT
+            READ BUDGETS-FILE
+                INVALID KEY
+                    IF FS-BUDGETS NOT = "23"
+                        PERFORM BUDGET-STORAGE-ERROR
+                    END-IF
+                NOT INVALID KEY
+                    IF BUDGET-AMOUNT IS NUMERIC AND BUDGET-AMOUNT > 0
+                        MOVE BUDGET-AMOUNT TO CAT-LIMIT(CAT-IDX)
+                        MOVE "Y" TO CAT-BUDGETED(CAT-IDX)
+                    ELSE
+                        PERFORM BUDGET-STORAGE-ERROR
+                    END-IF
+            END-READ
+        END-PERFORM
+        CLOSE BUDGETS-FILE
+    ELSE
+        IF FS-BUDGETS = "35"
+            CALL STATIC "access" USING BY REFERENCE Z"data/budgets.dat"
+                BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+            IF W-FILE-EXISTS = 0 PERFORM BUDGET-STORAGE-ERROR END-IF
+        ELSE
+            PERFORM BUDGET-STORAGE-ERROR
+        END-IF
+    END-IF.
+    OPEN INPUT TRANSACTIONS-FILE.
+    IF FS-LEDGER = "00"
+        STRING W-BUDGET-MONTH "-01" INTO W-BUDGET-START END-STRING
+        MOVE W-BUDGET-START TO TRANS-DATE
+        MOVE "N" TO W-EOF
+        START TRANSACTIONS-FILE KEY IS GREATER THAN OR EQUAL TO TRANS-DATE
+            INVALID KEY MOVE "Y" TO W-EOF
+        END-START
+        PERFORM UNTIL W-EOF = "Y"
+            READ TRANSACTIONS-FILE NEXT
+                AT END MOVE "Y" TO W-EOF
+                NOT AT END
+                    IF TRANS-DATE(1:7) NOT = W-BUDGET-MONTH
+                        MOVE "Y" TO W-EOF
+                    ELSE
+                        IF TRANS-AMOUNT < 0 PERFORM UPDATE-CAT-TOTAL END-IF
+                    END-IF
+            END-READ
+        END-PERFORM
+        CLOSE TRANSACTIONS-FILE
+    ELSE
+        IF FS-LEDGER = "35"
+            CALL STATIC "access" USING BY REFERENCE Z"data/ledger.dat"
+                BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+            IF W-FILE-EXISTS = 0 PERFORM BUDGET-STORAGE-ERROR END-IF
+        ELSE
+            PERFORM BUDGET-STORAGE-ERROR
+        END-IF
+    END-IF.
+    PERFORM VARYING CAT-IDX FROM 1 BY 1 UNTIL CAT-IDX > 5
+        IF CAT-BUDGETED(CAT-IDX) = "Y"
+            ADD CAT-LIMIT(CAT-IDX) TO W-BUDGET-PLANNED
+            COMPUTE W-BUDGET-SPENT = W-BUDGET-SPENT - CAT-TOTAL(CAT-IDX)
+        ELSE
+            COMPUTE W-BUDGET-UNCOVERED = W-BUDGET-UNCOVERED - CAT-TOTAL(CAT-IDX)
+        END-IF
+    END-PERFORM.
+
+DISPLAY-BUDGET-VIEW.
+    IF W-BUDGET-ERROR = "Y" EXIT PARAGRAPH END-IF.
+    DISPLAY "<section class='card budget-month'><form method='GET' id='budget-month-form'>"
+            "<input type='hidden' name='view' value='BUDGET'>"
+            "<label for='budget-month'>Luna bugetului<input type='month' name='month' "
+            "id='budget-month' min='0001-01' max='9999-12' required value='"
+            W-BUDGET-MONTH "'></label><button class='btn' type='submit'>Vezi luna</button>"
+            "<button class='btn secondary' type='button' data-month-step='-1' "
+            "aria-label='Luna precedenta'>&larr;</button>"
+            "<button class='btn secondary' type='button' data-month-step='1' "
+            "aria-label='Luna urmatoare'>&rarr;</button></form>"
+            "<p class='muted'>Fiecare limita se aplica doar lunii selectate. "
+            "Veniturile nu reduc cheltuielile urmarite.</p></section>"
+            "<section class='metrics' aria-label='Rezumat buget lunar'>".
+    MOVE W-BUDGET-PLANNED TO W-DISPLAY-TOTAL.
+    DISPLAY "<article class='metric metric-balance'><span class='metric-label'>Planificat</span>"
+            "<strong>" FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong>"
+            "<small>Totalul limitelor setate pentru luna " W-BUDGET-MONTH "</small></article>".
+    MOVE W-BUDGET-SPENT TO W-DISPLAY-TOTAL.
+    DISPLAY "<article class='metric'><span class='metric-label'>Cheltuit din buget</span>"
+            "<strong>" FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong>"
+            "<small>Cheltuieli in categoriile cu limita</small></article>".
+    COMPUTE W-BUDGET-REMAINING = W-BUDGET-PLANNED - W-BUDGET-SPENT.
+    MOVE W-BUDGET-REMAINING TO W-DISPLAY-TOTAL.
+    DISPLAY "<article class='metric'><span class='metric-label'>Disponibil</span>"
+            "<strong>" FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong>"
+            "<small>Planificat minus cheltuit din buget</small></article>".
+    MOVE W-BUDGET-UNCOVERED TO W-DISPLAY-TOTAL.
+    DISPLAY "<article class='metric'><span class='metric-label'>Fara buget</span>"
+            "<strong>" FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong>"
+            "<small>Cheltuieli in categoriile fara limita</small></article>"
+            "</section><section class='budget-grid' aria-label='Bugete pe categorii'>".
+    PERFORM VARYING CAT-IDX FROM 2 BY 1 UNTIL CAT-IDX > 5
+        PERFORM RENDER-BUDGET-CARD
+    END-PERFORM.
+    DISPLAY "</section>".
+
+RENDER-BUDGET-CARD.
+    COMPUTE W-BUDGET-ACTUAL = CAT-TOTAL(CAT-IDX) * -1.
+    DISPLAY "<article class='card budget-card' data-budget='"
+            FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'><div class='section-heading'><h2>"
+            FUNCTION TRIM(CAT-NAME(CAT-IDX)) "</h2>".
+    IF CAT-BUDGETED(CAT-IDX) = "Y"
+        EVALUATE TRUE
+            WHEN W-BUDGET-ACTUAL > CAT-LIMIT(CAT-IDX)
+                DISPLAY "<span class='budget-status over'>Limita depasita</span>"
+            WHEN W-BUDGET-ACTUAL >= CAT-LIMIT(CAT-IDX) * 0.8
+                DISPLAY "<span class='budget-status near'>Aproape de limita</span>"
+            WHEN OTHER DISPLAY "<span class='budget-status'>In grafic</span>"
+        END-EVALUATE
+        COMPUTE W-BUDGET-PCT ROUNDED = FUNCTION MIN(100,
+            W-BUDGET-ACTUAL * 100 / CAT-LIMIT(CAT-IDX))
+        MOVE W-BUDGET-PCT TO W-BUDGET-PCT-D
+        DISPLAY "</div><progress max='100' value='"
+                FUNCTION TRIM(W-BUDGET-PCT-D) "' aria-label='Progres "
+                FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'></progress>"
+    ELSE
+        DISPLAY "<span class='budget-status unset'>Fara limita</span></div>"
+    END-IF.
+    MOVE W-BUDGET-ACTUAL TO W-DISPLAY-TOTAL.
+    DISPLAY "<p class='budget-actual'><strong>" FUNCTION TRIM(W-DISPLAY-TOTAL)
+            "</strong><span> cheltuit in " W-BUDGET-MONTH "</span></p>".
+    IF CAT-BUDGETED(CAT-IDX) = "Y"
+        COMPUTE W-BUDGET-REMAINING = CAT-LIMIT(CAT-IDX) - W-BUDGET-ACTUAL
+        MOVE W-BUDGET-REMAINING TO W-DISPLAY-TOTAL
+        DISPLAY "<p class='budget-left'>Disponibil: <b>"
+                FUNCTION TRIM(W-DISPLAY-TOTAL) "</b></p>"
+    ELSE
+        DISPLAY "<p class='budget-left muted'>Seteaza o limita pentru a urmari progresul.</p>"
+    END-IF.
+    DISPLAY "<form method='POST' action='?view=BUDGET&amp;month=" W-BUDGET-MONTH "'>"
+            "<input type='hidden' name='cmd' value='budget-save'>"
+            "<input type='hidden' name='csrf_token' value='"
+            FUNCTION TRIM(W-CSRF-TOKEN) "'>"
+            "<input type='hidden' name='month' value='" W-BUDGET-MONTH "'>"
+            "<input type='hidden' name='cat' value='"
+            FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'>"
+            "<label for='budget-" FUNCTION TRIM(CAT-NAME(CAT-IDX))
+            "'>Limita lunara<input type='number' step='0.01' min='0.01' max='9999999.99' "
+            "required name='amount' id='budget-" FUNCTION TRIM(CAT-NAME(CAT-IDX))
+            "' placeholder='De exemplu, 500.00' value='" WITH NO ADVANCING.
+    IF CAT-BUDGETED(CAT-IDX) = "Y"
+        MOVE CAT-LIMIT(CAT-IDX) TO W-BUDGET-LIMIT-D
+        DISPLAY FUNCTION TRIM(W-BUDGET-LIMIT-D) "'></label>"
+    ELSE
+        DISPLAY "'></label>"
+    END-IF.
+    DISPLAY "<button type='submit' class='btn' aria-label='Salveaza buget "
+            FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'>Salveaza limita</button></form>".
+    IF CAT-BUDGETED(CAT-IDX) = "Y"
+        DISPLAY "<form method='POST' data-delete='budget' action='?view=BUDGET&amp;month="
+                W-BUDGET-MONTH "'><input type='hidden' name='cmd' value='budget-del'>"
+                "<input type='hidden' name='csrf_token' value='"
+                FUNCTION TRIM(W-CSRF-TOKEN) "'>"
+                "<input type='hidden' name='month' value='" W-BUDGET-MONTH "'>"
+                "<input type='hidden' name='cat' value='"
+                FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'>"
+                "<button class='budget-remove' type='submit' aria-label='Elimina buget "
+                FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'>Elimina limita</button></form>"
+    END-IF.
+    DISPLAY "</article>".
+
 DISPLAY-REPORT-VIEW.
     PERFORM INITIALIZE-SUMMARY.
     PERFORM DISPLAY-TOOLBAR.
@@ -2150,6 +2567,12 @@ RENDER-AUDIT-ROW.
 OPEN-LEDGER-FILE.
     OPEN I-O TRANSACTIONS-FILE.
     IF FS-LEDGER = "35"
+        CALL STATIC "access" USING BY REFERENCE Z"data/ledger.dat"
+            BY VALUE 0 RETURNING W-FILE-EXISTS END-CALL
+        IF W-FILE-EXISTS = 0
+            PERFORM NATIVE-STORAGE-ERROR
+            EXIT PARAGRAPH
+        END-IF
         OPEN OUTPUT TRANSACTIONS-FILE
         CLOSE TRANSACTIONS-FILE
         OPEN I-O TRANSACTIONS-FILE

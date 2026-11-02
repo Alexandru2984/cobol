@@ -140,3 +140,23 @@ politica pentru scripturi. Browser-ul public confirmă lipsa scripturilor inject
 no-transform pentru aceste injecții:
 https://developers.cloudflare.com/web-analytics/faq/
 https://developers.cloudflare.com/cloudflare-challenges/challenge-types/javascript-detections/
+
+## Etapa 4.1 — bugete și tratarea indisponibilității ISAM
+
+Bugetele sunt date suplimentare în `budgets.dat`; înregistrările tranzacțiilor și
+schema lor rămân aceleași. Citirea și modificarea bugetelor folosesc același lock,
+autentificare, CSRF, limite de bytes, categorii și validare decimală. Cheia combină
+luna și categoria. Backup-ul verifică acum dinamic toate fișierele ISAM.
+
+Regresii noi: separare între luni, sumarea cheltuielilor fără compensare prin
+venituri, praguri și depășiri, limite invalide, calendar, autentificare/CSRF și
+eliminare fără modificarea exportului tranzacțiilor. Un fișier ISAM existent care
+nu poate fi deschis nu este recreat ca bază goală. Registrul indisponibil oprește
+răspunsurile financiare/exporturile cu 503; un lockout store defect nu permite
+downgrade la login fără protecție. Testele păstrează explicit octeții fișierelor
+corupte, fără operații distructive pe datele live.
+
+Validarea acestei etape: 74 teste automate trecute; fluxul de bugete trecut în
+Chromium (salvare, actualizare, depășire, schimbare lună, eliminare și verificarea
+că tranzacțiile rămân), împreună cu regresiile desktop/mobile existente. Snapshot-ul
+cu bugete este extras și verificat offline. Nu au fost create bugete demo în producție.

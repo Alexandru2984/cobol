@@ -11,6 +11,7 @@ No database service, CDN fonts or JavaScript framework is required.
 
 - Add, edit and delete transactions with confirmation and redirect after saving.
 - Income, expenses, net balance, savings rate and category summaries.
+- Monthly expense budgets with category limits, progress, alerts and month navigation.
 - Description search, category/type/date filters, four sort orders and pagination.
 - Quick date ranges, monthly reports sharing the active filters, CSV export.
 - Mobile transaction cards, light/dark theme, keyboard shortcuts, print layout.

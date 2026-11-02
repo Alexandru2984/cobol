@@ -48,7 +48,7 @@ def client(workdir, monkeypatch):
     monkeypatch.delenv("LEDGER_PASS_HASH", raising=False)
     monkeypatch.delenv("LEDGER_SESSION_TTL", raising=False)
     for name in ("ledger.dat", "sessions.dat", "lockout.dat",
-                 "audit.log"):
+                 "audit.log", "budgets.dat", "budgets.dat.1"):
         p = workdir / "data" / name
         if p.exists():
             p.unlink()
@@ -532,3 +532,124 @@ def test_backup_restore_and_tampering_detection(client, workdir, tmp_path):
         stream.write(b"tampered")
     assert subprocess.run(verifier, capture_output=True).returncode != 0
     assert b"restore proof" in client.get("/", headers=headers).data
+
+
+def save_budget(client, headers, month="2026-07", category="Mancare", amount="100"):
+    return client.post("/?view=BUDGET&month=" + month, headers=headers,
+                       data={"cmd": "budget-save", "month": month, "cat": category, "amount": amount})
+
+
+def test_budget_save_update_delete_does_not_modify_transactions(client):
+    _, headers = login(client)
+    add(client, headers, "2026-07-01", "Mancare", "groceries", "-80")
+    before = client.get("/?export=csv", headers=headers).data
+    response = save_budget(client, headers)
+    assert response.status_code == 200
+    assert b"Buget lunar salvat" in response.data
+    assert b"Aproape de limita" in response.data
+    assert b"value='100.00'" in response.data
+    response = save_budget(client, headers, amount="50")
+    assert b"Limita depasita" in response.data
+    assert b"-30.00" in response.data
+    response = client.post("/?view=BUDGET&month=2026-07", headers=headers,
+        data={"cmd": "budget-del", "month": "2026-07", "cat": "Mancare"})
+    assert b"Limita de buget eliminata" in response.data
+    assert b"value='50.00'" not in response.data
+    assert before == client.get("/?export=csv", headers=headers).data
+    assert b"BUDGET-DEL" in client.get("/?view=AUDIT", headers=headers).data
+
+
+def test_budgets_separate_months_and_do_not_net_income(client):
+    _, headers = login(client)
+    add(client, headers, "2026-07-01", "Mancare", "expense", "-80")
+    add(client, headers, "2026-07-02", "Mancare", "positive adjustment", "20")
+    add(client, headers, "2026-06-30", "Mancare", "other month", "-300")
+    save_budget(client, headers, month="2026-06", amount="500")
+    response = save_budget(client, headers, month="2026-07", amount="100")
+    card = re.search(rb"data-budget='Mancare'([\s\S]+?)</article>", response.data)[1]
+    assert b"80.00" in card and b"60.00" not in card and b"300.00" not in card
+    assert b"value='100.00'" in card
+    june = client.get("/?view=BUDGET&month=2026-06", headers=headers)
+    assert b"value='500.00'" in june.data
+    august = client.get("/?view=BUDGET&month=2026-08", headers=headers)
+    assert b"value='100.00'" not in august.data
+
+
+@pytest.mark.parametrize("amount", ["0", "-1", "10000000", "1.234", "."])
+def test_budget_invalid_limits_rejected(client, amount):
+    _, headers = login(client)
+    assert b"Buget invalid" in save_budget(client, headers, amount=amount).data
+    page = client.get("/?view=BUDGET&month=2026-07", headers=headers)
+    assert b"data-delete='budget'" not in page.data
+
+
+@pytest.mark.parametrize("month", ["2026-13", "0000-01", "26-01", "2026-1", "2026-00"])
+def test_budget_month_validation(client, month):
+    assert client.get("/?view=BUDGET&month=" + month).status_code == 400
+
+
+def test_budget_auth_and_csrf(client):
+    response = save_budget(client, {}, amount="50")
+    assert b"<h2>Login</h2>" in response.data
+    _, headers = login(client)
+    assert b"data-delete='budget'" not in client.get("/?view=BUDGET&month=2026-07", headers=headers).data
+    response = client.post("/", headers=headers, csrf=False,
+        data={"cmd": "budget-save", "month": "2026-07", "cat": "Mancare", "amount": "100"})
+    assert response.status_code == 403
+
+
+def test_budget_database_in_verified_snapshot(client, workdir, tmp_path):
+    import tarfile
+    _, headers = login(client)
+    save_budget(client, headers)
+    destination = tmp_path / "budgets-backup"
+    subprocess.run([os.path.join(ROOT, "backup.sh")], check=True, capture_output=True,
+        env={**os.environ,"LEDGER_APP_DIR":str(workdir),"LEDGER_BACKUP_DIR":str(destination)})
+    archive = next(destination.glob("*.tar.gz"))
+    with tarfile.open(archive) as source:
+        assert "data/budgets.dat" in source.getnames()
+    subprocess.run([sys.executable,os.path.join(ROOT,"ops/verify-backup.py"),str(archive)],
+                   check=True,capture_output=True)
+
+
+@pytest.mark.parametrize("month", ["0001-01", "9999-12"])
+def test_budget_calendar_boundaries(client, month):
+    _, headers = login(client)
+    assert client.get("/?view=BUDGET&month=" + month, headers=headers).status_code == 200
+
+
+def test_corrupt_budget_storage_fails_without_overwriting(client, workdir):
+    _, headers = login(client)
+    path = workdir / "data/budgets.dat"
+    broken = b"not a BDB database"
+    path.write_bytes(broken)
+    page = client.get("/?view=BUDGET&month=2026-07", headers=headers)
+    assert page.status_code == 503
+    assert b"name='cmd' value='budget-save'" not in page.data
+    assert save_budget(client, headers).status_code == 503
+    assert path.read_bytes() == broken
+
+
+@pytest.mark.parametrize("name", ["ledger.dat", "sessions.dat", "lockout.dat"])
+def test_existing_corrupt_isam_is_never_recreated(client, workdir, name):
+    _, headers = login(client)
+    path = workdir / "data" / name
+    broken = b"invalid database must be preserved"
+    path.write_bytes(broken)
+    if name == "ledger.dat":
+        response = add(client, headers, "2026-07-01", "Hobby", "must not write", "1")
+        assert client.get("/?export=csv", headers=headers).status_code == 503
+    else:
+        response, issued = login(client)
+        assert not issued
+    assert response.status_code == 503
+    assert path.read_bytes() == broken
+
+
+def test_budget_requires_expense_category_and_month(client):
+    _, headers = login(client)
+    assert b"categorie de cheltuieli" in save_budget(client, headers, category="Venituri").data
+    response = client.post("/", headers=headers,
+        data={"cmd": "budget-save", "cat": "Mancare", "amount": "100"})
+    assert response.status_code == 400
+    assert client.get("/?view=BUDGET&month=", headers=headers).status_code == 400
