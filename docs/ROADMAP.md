@@ -70,3 +70,16 @@ Salariu, chirie și abonamente săptămânale/lunare/anuale; previzualizare, edi
 pauză/reluare și arhivare. Înregistrare explicită a scadenței cu rezervare de ID,
 jurnal de recuperare și protecție la repetarea cererii. Vezi `ARCHITECTURE.md` pentru
 persistență, limite și criteriile unei migrări SQLite.
+
+
+## Etapa 5 livrată: CI și prezentare publică
+
+Matrice Python 3.12/3.14, audit Python/npm, verificări de sintaxă și workflow,
+Chromium desktop/mobile, scanare automată de accesibilitate și rapoarte de depanare.
+Pagina `/about` prezintă funcțiile cu date demonstrative; canonical, Open Graph,
+Twitter Card, imagine socială, sitemap și robots pentru descoperire. Registrul,
+rapoartele, bugetele și recurentele rămân autentificate și noindex.
+
+Prioritatea următoare de produs: import CSV cu previzualizare și detectare de duplicate,
+apoi conturi/transferuri și obiective de economisire. O migrare SQLite are propria etapă
+de comparație și restaurare, descrisă în `ARCHITECTURE.md`.

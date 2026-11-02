@@ -1,7 +1,8 @@
 # Ledger of Ages
 
 Personal finance in COBOL: an ISAM ledger with a responsive web interface,
-filtered reports and CSV export. Live at [cobol.micutu.com](https://cobol.micutu.com).
+filtered reports and CSV export.
+Public presentation: [cobol.micutu.com/about](https://cobol.micutu.com/about). Live at [cobol.micutu.com](https://cobol.micutu.com).
 
 The transaction engine, validation, sessions, audit and reports run in GnuCOBOL.
 Flask provides the HTTP/CGI security boundary; scrypt verification uses Werkzeug.
@@ -63,3 +64,8 @@ Optional browser verification: install Playwright + Chromium in a tooling enviro
 then run `venv/bin/python tests/run_browser.py`. The runner creates disposable data,
 starts a loopback server and checks desktop/mobile workflows. Screenshots are saved in
 ignored `artifacts/`. `PLAYWRIGHT_MODULE` and `LEDGER_CHROMIUM` can point to existing tools.
+
+
+[Continuous checks](docs/CI.md) cover two Python versions, browser workflows,
+accessibility and dependency audits. Public discovery uses `/about`, canonical and
+social metadata, `/robots.txt` and `/sitemap.xml`. Private ledger pages retain noindex.

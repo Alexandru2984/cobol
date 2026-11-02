@@ -8,8 +8,9 @@ import secrets
 import subprocess
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
+from xml.etree.ElementTree import Element, SubElement, tostring
 
-from flask import Flask, Response, abort, g, jsonify, request
+from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request
 from werkzeug.security import check_password_hash
 
 from security import (FORM_LIMITS, QUERY_LIMITS, SESSION_COOKIE, client_ip,
@@ -54,7 +55,10 @@ def security_headers(response):
     response.headers.update({
         "Cache-Control": "no-store, private", "Pragma": "no-cache",
         "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
-        "Referrer-Policy": "same-origin", "X-Robots-Tag": "noindex, nofollow",
+        "Referrer-Policy": "same-origin", "X-Robots-Tag": (
+            "index, follow" if response.status_code == 200 and (
+                request.endpoint == "about" or request.path == "/static/public-card.png")
+            else "noindex, nofollow"),
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
         "Content-Security-Policy": "default-src 'self'; base-uri 'none'; "
             "object-src 'none'; frame-ancestors 'none'; form-action 'self'; "
@@ -65,6 +69,37 @@ def security_headers(response):
     })
     response.vary.add("Cookie")
     return response
+
+
+def public_base():
+    return os.environ.get("LEDGER_PUBLIC_ORIGIN", "https://cobol.micutu.com").rstrip("/")
+
+
+@app.get("/about")
+def about():
+    # This page is static product information, independent of credentials and ledger data.
+    return render_template("about.html", public_base=public_base())
+
+
+@app.get("/about/")
+def about_redirect():
+    return redirect("/about", code=308)
+
+
+@app.get("/robots.txt")
+def robots():
+    return Response("User-agent: *\nAllow: /\nDisallow: /health\nDisallow: /data/\n"
+                    "Disallow: /cgi-bin/\nSitemap: " + public_base() + "/sitemap.xml\n",
+                    content_type="text/plain; charset=utf-8")
+
+
+@app.get("/sitemap.xml")
+def sitemap():
+    root = Element("urlset", xmlns="http://www.sitemaps.org/schemas/sitemap/0.9")
+    url = SubElement(root, "url")
+    SubElement(url, "loc").text = public_base() + "/about"
+    return Response(tostring(root, encoding="utf-8", xml_declaration=True),
+                    content_type="application/xml; charset=utf-8")
 
 
 @app.route("/health")
