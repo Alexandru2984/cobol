@@ -52,7 +52,7 @@ PYVERSIONS
 cobc -x -free "$release/ledger.cbl" "$release/sha256.cbl" -o "$release/ledger.cgi"
 cobc -x -free "$release/seed.cbl" -o "$release/seed"
 "$PYTHON" -m py_compile "$release/app.py" "$release/security.py"
-LEDGER_TEST_BIN="$release/ledger.cgi" "$PYTHON" -m pytest "$release/tests" -q
+LEDGER_TEST_BIN="$release/ledger.cgi" "$PYTHON" -m pytest "$release/tests" -q -p no:cacheprovider
 sudo -n /usr/local/sbin/cobol-ledger-backup
 ln -s -- "$release" "$RELEASES_DIR/.current-next"
 mv -Tf -- "$RELEASES_DIR/.current-next" "$CURRENT"

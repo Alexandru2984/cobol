@@ -1,4 +1,4 @@
-PYTHON ?= $(shell if [ -x ../runtime-venv/bin/python ]; then echo ../runtime-venv/bin/python; elif [ -x venv/bin/python ]; then echo venv/bin/python; else echo python3; fi)
+PYTHON ?= $(shell if [ -x ../current/runtime/bin/python ]; then echo ../current/runtime/bin/python; elif [ -x ../runtime-venv/bin/python ]; then echo ../runtime-venv/bin/python; elif [ -x venv/bin/python ]; then echo venv/bin/python; else echo python3; fi)
 COBC   ?= cobc
 
 .PHONY: build seed test demo deploy clean

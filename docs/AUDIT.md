@@ -102,3 +102,31 @@ Validare înainte de activare: 53 teste trecute în mediul Python nou; browser s
 reproductibil trecut în același mediu; setul runtime fixat are zero vulnerabilități
 cunoscute raportate de pip-audit la momentul verificării. Aceasta nu înlocuiește
 reviziile viitoare și nu certifică pachetele OS sau celelalte proiecte ale VPS-ului.
+
+## Validare în producție — 3 noiembrie, ora locală
+
+- Release activat cu cod/binar/venv versionate; health și smoke test trecute.
+- `/`, `/health`, CSS și JS: 200 pe domeniul public. `.env`: 403; fișierele ISAM și
+  ruta CGI directă: 404. POST fără CSRF: 403 înainte de executarea COBOL.
+- Headere no-store și CSP stricte confirmate; analytics nu mai este injectat.
+- `ledger.dat` și `ledger.dat.1` au exact aceleași SHA-256 înainte și după deploy.
+- Datele live au directoare 0700 și fișiere 0600; vhost-ul trece `nginx -t`.
+- Rollback exercitat izolat cu readiness eșuat: codul și runtime-ul anterior restaurate.
+- Backup executat prin serviciul systemd real, fără oprirea aplicației; checksum,
+  extragere offline și toate cele trei fișiere ISAM prezente verificate cu succes.
+- A fost corectată incompatibilitatea GNU tar/openat2 cu RestrictSUIDSGID folosind
+  arhivarea Python; restricția systemd este păstrată. Testul dedicat de backup și
+  detecție a alterării arhivei trece după această corecție.
+
+Jurnalul timerului vechi avea și rulări eșuate (30 octombrie și 2 noiembrie), deși
+existau copii valide mai vechi. Execuția reală a noului helper este verificată; timerul
+rămâne activ zilnic. În producție, Cloudflare refuză unele cereri cu fingerprint de
+client Python; smoke checks publice au folosit curl, iar protecția Cloudflare a fost
+păstrată. Dovezi pentru dependențe: `docs/evidence/dependencies.json`.
+
+## Restanțe explicite
+
+Parola existentă este păstrată și nu coincide cu parola implicită publică eliminată
+din cod. Migrarea la scrypt necesită rotație interactivă prin `manage.py`. Contul Unix
+dedicat, backup-ul în afara VPS-ului și integrarea alertelor necesită etape ulterioare.
+Funcțiile din etapa 4 a roadmap-ului sunt propuneri; nu sunt prezentate drept livrate.

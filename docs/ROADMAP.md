@@ -51,3 +51,8 @@ de economisire, filtrare venit/cheltuială, patru sortări, intervale rapide,
 rapoarte filtrate, carduri pe mobil, confirmare accesibilă, scurtături, print,
 stări goale, feedback și redirect după salvare. Data formularului folosește
 Europe/Bucharest; expirarea sesiunilor se calculează în UTC.
+
+Etapa 3 este activă în producție: releases cu runtime asociat, rollback verificat,
+backup cu flock și probă de restaurare offline, configurații versionate și runbook.
+Urmează prioritar: rotație scrypt, identitate Unix dedicată, copie offsite/alerte,
+apoi bugete, recurente și import CSV cu previzualizare.

@@ -27,11 +27,27 @@ for database in ledger.dat ledger.dat.1 sessions.dat lockout.dat; do
         db5.3_verify -q "$DATA_DIR/$database"
     fi
 done
-tar --one-file-system --exclude='data/backups' --exclude='data/.ledger.lock' \
-    -C "$APP_DIR" -czf "$staging/$name" data
+# Python's tarfile avoids GNU tar/openat2 incompatibility with RestrictSUIDSGID.
+python3 - "$APP_DIR" "$staging/$name" <<'PYSNAPSHOT'
+from pathlib import Path
+import sys, tarfile
+app = Path(sys.argv[1])
+def include(member):
+    if member.name == "data/.ledger.lock" or member.name == "data/backups" or member.name.startswith("data/backups/"):
+        return None
+    if not (member.isfile() or member.isdir()):
+        raise RuntimeError("Snapshot refuses links and special files")
+    return member
+with tarfile.open(sys.argv[2], "w:gz") as archive:
+    archive.add(app / "data", arcname="data", filter=include)
+PYSNAPSHOT
 flock -u 9
 gzip -t "$staging/$name"
-tar -xzf "$staging/$name" -C "$staging"
+python3 - "$staging/$name" "$staging" <<'PYEXTRACT'
+import sys, tarfile
+with tarfile.open(sys.argv[1]) as archive:
+    archive.extractall(sys.argv[2], filter="data")
+PYEXTRACT
 for database in ledger.dat ledger.dat.1 sessions.dat lockout.dat; do
     if [[ -f $staging/data/$database ]]; then
         db5.3_verify -q "$staging/data/$database"

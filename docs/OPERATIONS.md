@@ -29,7 +29,7 @@
 | `LEDGER_TRUSTED_PROXIES` | CIDR-uri; implicit doar loopback; nginx suprascrie X-Real-IP |
 | `LEDGER_TIMEZONE` | Ziua formularului; implicit Europe/Bucharest; sesiunile și auditul folosesc UTC |
 
-Nu transmite parola în argv sau într-un URL. `../runtime-venv/bin/python manage.py`
+Nu transmite parola în argv sau într-un URL. `../current/runtime/bin/python manage.py`
 solicită parola fără afișare, salvează scrypt în `.env` atomic și păstrează permisiuni 0600.
 Schimbarea parolei necesită restart. Pentru revocare globală: oprește serviciul,
 fă backup, mută `data/sessions.dat*` într-un director privat în afara `data/`, schimbă
@@ -71,6 +71,8 @@ Timerul `cobol-ledger-backup.timer` rulează zilnic la 03:05 UTC, cu jitter de p
 ledger/index/sesiuni/lockout/audit, apoi extrage și verifică din nou. Nu oprește site-ul. Serviciul root are doar CAP_DAC_OVERRIDE/CAP_CHOWN pentru citirea
 fișierelor private și owner-ul lock-ului; sandbox-ul permite scriere numai în data/
 și directorul de backup, iar familia de socket-uri este limitată la AF_UNIX.
+Arhivarea folosește tarfile din Python pentru compatibilitate cu RestrictSUIDSGID;
+GNU tar de pe acest VPS cere openat2, refuzat de acel sandbox.
 Backup-urile sunt private în `/srv/backups/cobol-ledger`, retenție 14 zile. Lock-ul activ
 și backup-urile vechi nu intră în arhivă. `.env` și configurațiile se salvează separat,
 cu acces restrâns. Un backup pe același VPS nu asigură recuperarea dacă VPS-ul este pierdut.
@@ -78,7 +80,7 @@ cu acces restrâns. Un backup pe același VPS nu asigură recuperarea dacă VPS-
 ```bash
 sudo systemctl start cobol-ledger-backup.service
 sudo journalctl -u cobol-ledger-backup.service -n 15 --no-pager
-sudo /srv/canary/cobol.micutu.com/runtime-venv/bin/python ops/verify-backup.py /srv/backups/cobol-ledger/ARHIVA.tar.gz
+sudo /srv/canary/cobol.micutu.com/current/runtime/bin/python ops/verify-backup.py /srv/backups/cobol-ledger/ARHIVA.tar.gz
 ```
 
 Restaurare reală: oprește serviciul, păstrează o copie a datelor curente, verifică checksum
