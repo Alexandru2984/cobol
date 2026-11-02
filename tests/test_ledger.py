@@ -62,7 +62,17 @@ def client(workdir, monkeypatch):
                 match = re.search(rb"name='csrf_token' value='([^']+)'", page.data)
                 if match and isinstance(kwargs.get("data"), dict):
                     kwargs["data"] = {**kwargs["data"], "csrf_token": match[1].decode()}
-            return super().post(*args, **kwargs)
+            response = super().post(*args, **kwargs)
+            if response.status_code == 303:
+                headers = dict(kwargs.get("headers", {}))
+                for cookie in response.headers.getlist("Set-Cookie"):
+                    if cookie.startswith("__Host-ledger-session="):
+                        headers["Cookie"] = cookie.split(";", 1)[0]
+                page = self.get(response.headers["Location"], headers=headers)
+                for cookie in response.headers.getlist("Set-Cookie"):
+                    page.headers.add("Set-Cookie", cookie)
+                return page
+            return response
 
     app_module.app.test_client_class = SecureClient
     return app_module.app.test_client(use_cookies=False)
@@ -270,13 +280,13 @@ def test_pagination(client):
         add(client, headers, f"2026-07-{i:02d}", "Hobby", f"tx{i:02d}", "-1")
 
     resp = client.get("/", headers=headers)
-    assert resp.data.count(b"<tr><td>#") == 20
+    assert resp.data.count(b"data-transaction=") == 20
     assert b"Pagina 1 din 2" in resp.data
     assert b"Total (25 tranzactii)" in resp.data  # totalul ramane global
     assert b"-25.00" in resp.data
 
     resp = client.get("/?page=2", headers=headers)
-    assert resp.data.count(b"<tr><td>#") == 5
+    assert resp.data.count(b"data-transaction=") == 5
     assert b"Pagina 2 din 2" in resp.data
     assert b"tx25" in resp.data
 
@@ -434,3 +444,69 @@ def test_login_response_has_token_bound_to_new_session(client):
                            headers=headers, csrf=False)
     assert response.status_code == 200
     assert b"first action" in response.data
+
+
+def test_financial_metrics_and_type_filters(client):
+    _, headers = login(client)
+    add(client, headers, "2026-07-01", "Venituri", "salary", "1000")
+    add(client, headers, "2026-07-02", "Mancare", "groceries", "-250")
+    page = client.get("/", headers=headers)
+    assert b"75.0%" in page.data
+    assert b"Sold net" in page.data
+    expenses = client.get("/?kind=EXPENSE", headers=headers)
+    assert b"groceries" in expenses.data and b"salary" not in expenses.data
+    assert b"Total (1 tranzactii)" in expenses.data
+    csv = client.get("/?kind=EXPENSE&export=csv", headers=headers)
+    assert b"groceries" in csv.data and b"salary" not in csv.data
+
+
+def test_descending_sort_and_page_clamp(client):
+    _, headers = login(client)
+    add(client, headers, "2026-07-01", "Hobby", "older", "1")
+    add(client, headers, "2026-07-03", "Hobby", "newer", "1")
+    response = client.get("/?sort=DATE_DESC&page=50000", headers=headers)
+    assert response.data.index(b"newer</td>") < response.data.index(b"older</td>")
+    assert b"Total (2 tranzactii)" in response.data
+
+
+def test_report_respects_filters(client):
+    _, headers = login(client)
+    add(client, headers, "2026-06-01", "Venituri", "salary", "1000")
+    add(client, headers, "2026-07-01", "Hobby", "books", "-100")
+    response = client.get("/?view=REPORT&from=2026-07-01&kind=EXPENSE", headers=headers)
+    assert b"2026-06</b>" not in response.data
+    assert b"2026-07</b>" in response.data
+    assert b"-100.00" in response.data
+
+
+def test_aggregates_exceed_old_capacity(client):
+    _, headers = login(client)
+    for i in range(101):
+        add(client, headers, "2026-07-01", "Venituri", f"large{i}", "9999999.99")
+    page = client.get("/", headers=headers)
+    assert b"1,009,999,998.99" in page.data
+    report = client.get("/?view=REPORT", headers=headers)
+    assert b"1,009,999,998.99" in report.data
+
+
+def test_report_does_not_mix_month_121_into_month_120(client):
+    _, headers = login(client)
+    for i in range(121):
+        year, month = 2010 + i // 12, i % 12 + 1
+        add(client, headers, f"{year}-{month:02d}-01", "Hobby", f"month{i}", "-1")
+    report = client.get("/?view=REPORT", headers=headers)
+    assert b"2019-12</b>" in report.data
+    assert b"2020-01</b>" in report.data
+    assert b"-2.00" not in report.data
+
+
+def test_raw_success_redirect_prevents_refresh_resubmission(client):
+    import app
+    # Bypass the convenience client that follows redirects for legacy tests.
+    from flask.testing import FlaskClient
+    raw = FlaskClient(app.app, use_cookies=False)
+    response = raw.get("/")
+    token = re.search(rb"name='csrf_token' value='([^']+)'", response.data)[1].decode()
+    response = raw.post("/", data={"cmd": "login", "user": USER, "pass": PASS, "csrf_token": token})
+    assert response.status_code == 303
+    assert response.headers["Location"] == "/"

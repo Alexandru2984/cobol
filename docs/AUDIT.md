@@ -70,3 +70,15 @@ singurul punct de expunere a binarului CGI. Rularea CGI directă nu este o inter
 publică suportată. S02: scrypt 131072:8:1 disponibil prin `manage.py`; hash-ul existent
 nu poate fi convertit în scrypt(parola) fără parola originală, deci rotația rămâne
 restantă. S14 și schimbările de nginx vor fi aplicate odată cu deploy-ul verificat.
+
+## Etapa 2 implementată
+
+S12: totaluri extinse la 15 cifre întregi; raportul distinge 1200 luni și refuză
+explicit un interval mai mare, fără a amesteca luni sau a afișa totaluri parțiale.
+Regresii pentru >1 miliard și 121 luni. Aceleași filtre se aplică listei, KPI-urilor,
+raportului și exportului. Paginarea este limitată la paginile existente.
+Interfața a fost verificată în Chromium la 320, 375, 390, 768 și 1440 px fără overflow
+al paginii; login, adăugare/editare/ștergere, dialog, temă persistentă, rapoarte,
+filtre rapide, tastatură și logout trec în browser fără erori JS/CSP în mediul izolat.
+După mutații, redirect 303 previne repetarea POST-ului la refresh. Nu este o garanție
+de idempotency pentru retry de rețea; aceasta rămâne o extensie separată.

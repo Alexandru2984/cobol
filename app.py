@@ -1,4 +1,5 @@
 """Flask/WSGI bridge for the COBOL ledger, with a strict HTTP trust boundary."""
+from datetime import datetime
 import logging
 import os
 from pathlib import Path
@@ -6,6 +7,7 @@ import re
 import secrets
 import subprocess
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 from flask import Flask, Response, abort, g, jsonify, request
 from werkzeug.security import check_password_hash
@@ -105,6 +107,9 @@ def index():
             "LEDGER_TRUSTED_PROXIES", "127.0.0.1/32,::1/128").split(",")),
         "LEDGER_CSRF_TOKEN": csrf_token(app.config["SECRET_KEY"], session),
         "LEDGER_AUTH_MODE": "legacy", "LEDGER_AUTH_VERIFIED": "N",
+        "LEDGER_NOTICE": query.get("notice", ""),
+        "LEDGER_LOCAL_TODAY": datetime.now(ZoneInfo(
+            os.environ.get("LEDGER_TIMEZONE", "Europe/Bucharest"))).date().isoformat(),
     })
     input_data = urlencode(form).encode("ascii") if request.method == "POST" else None
     env["CONTENT_LENGTH"] = str(len(input_data or b""))
@@ -148,11 +153,14 @@ def cgi_response(stdout, current_csrf):
         abort(502, "Raspuns CGI invalid.")
     head, body = raw.split(separator, 1)
     response = Response(body, content_type="text/html; charset=utf-8")
+    result = ""
     for line in head.replace("\r\n", "\n").split("\n"):
         if ":" not in line:
             continue
         key, value = (part.strip() for part in line.split(":", 1))
-        if key.lower() in {"content-type", "content-disposition"}:
+        if key.lower() == "x-ledger-result":
+            result = value
+        elif key.lower() in {"content-type", "content-disposition"}:
             response.headers[key] = value
         elif key.lower() == "status":
             if not re.fullmatch(r"[1-5][0-9]{2}(?: .*)?", value):
@@ -163,6 +171,16 @@ def cgi_response(stdout, current_csrf):
             new_session = value.split(";", 1)[0].split("=", 1)[1]
             response.set_data(response.get_data(as_text=True).replace(
                 current_csrf, csrf_token(app.config["SECRET_KEY"], new_session)))
+    if request.method == "POST" and result in {"added", "updated", "deleted", "login", "logout"}:
+        target = {key: value for key, value in request.args.items()
+                  if key in QUERY_LIMITS and key not in {"edit", "export", "notice"}}
+        if result in {"added", "updated", "deleted"}:
+            target["notice"] = result
+        if result in {"login", "logout"}:
+            target = {}
+        response.status_code = 303
+        response.headers["Location"] = "/" + ("?" + urlencode(target) if target else "")
+        response.set_data("")
     return response
 
 

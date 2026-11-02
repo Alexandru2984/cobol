@@ -59,8 +59,8 @@ WORKING-STORAGE SECTION.
 01  FS-AUDIT                PIC XX.
 01  W-EOF                   PIC X VALUE "N".
 01  W-DISPLAY-AMOUNT        PIC --,---,--9.99.
-01  W-TOTAL-BALANCE         PIC S9(9)V99 VALUE 0.
-01  W-DISPLAY-TOTAL         PIC --,---,---,--9.99.
+01  W-TOTAL-BALANCE         PIC S9(15)V99 VALUE 0.
+01  W-DISPLAY-TOTAL         PIC ---,---,---,---,--9.99.
 01  W-LAST-ID               PIC 9(6) VALUE 0.
 
 *> CGI environment
@@ -189,15 +189,15 @@ WORKING-STORAGE SECTION.
 01  W-DESC-LC               PIC X(30).
 
 *> Pagination
-01  W-PAGE                  PIC 9(4) VALUE 1.
+01  W-PAGE                  PIC 9(5) VALUE 1.
 01  W-PAGE-RAW              PIC X(10).
 01  W-PAGE-SIZE             PIC 9(3) VALUE 20.
-01  W-PAGE-START            PIC 9(6).
-01  W-PAGE-END              PIC 9(6).
-01  W-TOTAL-PAGES           PIC 9(4).
-01  W-PAGE-D                PIC ZZZ9.
-01  W-PAGES-D               PIC ZZZ9.
-01  W-PGLNK-D               PIC ZZZ9.
+01  W-PAGE-START            PIC 9(7).
+01  W-PAGE-END              PIC 9(7).
+01  W-TOTAL-PAGES           PIC 9(5).
+01  W-PAGE-D                PIC ZZZZ9.
+01  W-PAGES-D               PIC ZZZZ9.
+01  W-PGLNK-D               PIC ZZZZ9.
 
 *> URL-encode buffers (pentru linkurile de paginare)
 01  W-ENC-IN                PIC X(60).
@@ -230,15 +230,15 @@ WORKING-STORAGE SECTION.
 
 *> Monthly report
 01  MONTH-TABLE.
-    05  MONTH-COUNT         PIC 9(3) VALUE 0.
-    05  MONTH-ENTRY         OCCURS 120 TIMES.
+    05  MONTH-COUNT         PIC 9(4) VALUE 0.
+    05  MONTH-ENTRY         OCCURS 1200 TIMES.
         10  MONTH-KEY       PIC X(7).
-        10  MONTH-INCOME    PIC S9(9)V99.
-        10  MONTH-EXPENSE   PIC S9(9)V99.
-01  W-M-IDX                 PIC 9(3).
-01  W-MAX-FLOW              PIC 9(9)V99 VALUE 0.
-01  W-NET-AMT               PIC S9(9)V99.
-01  W-ABS-EXP               PIC 9(9)V99.
+        10  MONTH-INCOME    PIC S9(15)V99.
+        10  MONTH-EXPENSE   PIC S9(15)V99.
+01  W-M-IDX                 PIC 9(4).
+01  W-MAX-FLOW              PIC 9(15)V99 VALUE 0.
+01  W-NET-AMT               PIC S9(15)V99.
+01  W-ABS-EXP               PIC 9(15)V99.
 01  W-BAR-PCT               PIC 9(3).
 01  W-BAR-PCT-D             PIC ZZ9.
 
@@ -256,12 +256,22 @@ WORKING-STORAGE SECTION.
 *> Current date
 01  W-CURRENT-DATE-STR      PIC X(21).
 01  W-TODAY-STR             PIC X(10).
+01  W-LOCAL-TODAY           PIC X(10).
 
 01  CAT-SUMMARY-TABLE.
     05  CAT-ENTRY           OCCURS 5 TIMES INDEXED BY CAT-IDX.
         10  CAT-NAME        PIC X(15).
-        10  CAT-TOTAL       PIC S9(9)V99.
+        10  CAT-TOTAL       PIC S9(15)V99.
 
+01  W-INCOME                PIC S9(15)V99 VALUE 0.
+01  W-EXPENSE               PIC S9(15)V99 VALUE 0.
+01  W-SAVING-RATE           PIC S9(3)V9 VALUE 0.
+01  W-RATE-DISPLAY          PIC ---9.9.
+01  W-SCAN-COUNT            PIC 9(6) VALUE 0.
+01  W-KIND                  PIC X(7) VALUE "ALL".
+01  W-REPORT-OVERFLOW       PIC X VALUE "N".
+01  W-RESULT                PIC X(8) VALUE SPACES.
+01  W-NOTICE                PIC X(8).
 01  W-CMD                   PIC X(20).
 01  W-DEL-ID-RAW            PIC X(10).
 01  W-DEL-ID                PIC 9(6).
@@ -298,6 +308,7 @@ LOAD-CONFIG.
     ACCEPT W-AUTH-MODE FROM ENVIRONMENT "LEDGER_AUTH_MODE".
     ACCEPT W-AUTH-VERIFIED FROM ENVIRONMENT "LEDGER_AUTH_VERIFIED".
     ACCEPT W-CSRF-TOKEN FROM ENVIRONMENT "LEDGER_CSRF_TOKEN".
+    ACCEPT W-NOTICE FROM ENVIRONMENT "LEDGER_NOTICE".
     DISPLAY "LEDGER_USER" UPON ENVIRONMENT-NAME.
     ACCEPT W-CFG-USER FROM ENVIRONMENT-VALUE.
     IF W-CFG-USER = SPACES OR LOW-VALUES
@@ -328,6 +339,10 @@ LOAD-CONFIG.
            W-CURRENT-DATE-STR(5:2) "-"
            W-CURRENT-DATE-STR(7:2)
            DELIMITED BY SIZE INTO W-TODAY-STR.
+    ACCEPT W-LOCAL-TODAY FROM ENVIRONMENT "LEDGER_LOCAL_TODAY".
+    IF W-LOCAL-TODAY NOT = SPACES AND LOW-VALUES
+        MOVE W-LOCAL-TODAY TO W-TODAY-STR
+    END-IF.
     PERFORM COMPUTE-ABS-NOW.
 
 READ-CGI-ENV.
@@ -394,6 +409,8 @@ PARSE-QUERY-STRING.
             MOVE W-PAIR-VAL TO W-URL-IN
             PERFORM URL-DECODE
             EVALUATE W-PAIR-KEY
+                WHEN "kind"
+                    MOVE W-URL-OUT TO W-KIND
                 WHEN "filter"
                     MOVE W-URL-OUT TO W-FILTER-CAT
                 WHEN "sort"
@@ -419,6 +436,9 @@ PARSE-QUERY-STRING.
             END-EVALUATE
         END-IF
     END-PERFORM.
+    IF W-KIND NOT = "INCOME" AND "EXPENSE"
+        MOVE "ALL" TO W-KIND
+    END-IF.
     PERFORM SANITIZE-RANGE-DATES.
     IF FUNCTION TRIM(W-SEARCH-Q) = SPACES
         MOVE SPACES TO W-SEARCH-Q
@@ -445,7 +465,7 @@ PARSE-PAGE.
     END-PERFORM.
     IF W-VALID = "Y"
         COMPUTE W-PAGE = FUNCTION MIN(
-            FUNCTION MAX(FUNCTION NUMVAL(W-PAGE-RAW), 1), 9999)
+            FUNCTION MAX(FUNCTION NUMVAL(W-PAGE-RAW), 1), 50000)
     ELSE
         MOVE 1 TO W-PAGE
     END-IF.
@@ -731,6 +751,7 @@ DO-LOGIN.
         PERFORM CLEAR-LOCKOUT
         MOVE "Y" TO W-LOGGED-IN
         MOVE "Y" TO W-SET-COOKIE
+        MOVE "login" TO W-RESULT
         MOVE "LOGIN" TO W-AUDIT-ACTION
         MOVE "autentificare reusita" TO W-AUDIT-DETAIL
         PERFORM WRITE-AUDIT
@@ -896,6 +917,7 @@ DO-LOGOUT.
     MOVE "N" TO W-LOGGED-IN.
     MOVE SPACES TO W-COOKIE-TOKEN.
     MOVE "L" TO W-SET-COOKIE.
+    MOVE "logout" TO W-RESULT.
     MOVE "LOGOUT" TO W-AUDIT-ACTION.
     MOVE "sesiune inchisa" TO W-AUDIT-DETAIL.
     PERFORM WRITE-AUDIT.
@@ -984,6 +1006,7 @@ WRITE-TRANSACTION.
             MOVE "Eroare la scriere (ID duplicat)." TO W-ERROR-MSG
             MOVE "Y" TO W-HAS-ERROR
         NOT INVALID KEY
+            MOVE "added" TO W-RESULT
             MOVE "ADD" TO W-AUDIT-ACTION
             MOVE SPACES TO W-AUDIT-DETAIL
             STRING "id=" TRANS-ID " "
@@ -1067,6 +1090,7 @@ DO-UPDATE.
                     MOVE "Eroare la actualizare." TO W-ERROR-MSG
                     MOVE "Y" TO W-HAS-ERROR
                 NOT INVALID KEY
+                    MOVE "updated" TO W-RESULT
                     MOVE "UPDATE" TO W-AUDIT-ACTION
                     MOVE SPACES TO W-AUDIT-DETAIL
                     STRING "id=" TRANS-ID " "
@@ -1109,7 +1133,10 @@ DO-DELETE.
                        FUNCTION TRIM(TRANS-DESC)
                     DELIMITED BY SIZE INTO W-AUDIT-DETAIL
                 DELETE TRANSACTIONS-FILE RECORD
-                PERFORM WRITE-AUDIT
+                IF FS-LEDGER = "00"
+                    MOVE "deleted" TO W-RESULT
+                    PERFORM WRITE-AUDIT
+                END-IF
         END-READ
         CLOSE TRANSACTIONS-FILE
     END-IF.
@@ -1224,7 +1251,10 @@ VALIDATE-CATEGORY.
     END-EVALUATE.
 
 DISPLAY-PAGE.
-    DISPLAY "Content-type: text/html; charset=utf-8".
+DISPLAY "Content-type: text/html; charset=utf-8".
+    IF W-RESULT NOT = SPACES
+        DISPLAY "X-Ledger-Result: " FUNCTION TRIM(W-RESULT)
+    END-IF.
     IF W-SET-COOKIE = "Y"
         DISPLAY "Set-Cookie: session=" W-NEW-TOKEN
                 "; Path=/; HttpOnly; Secure; SameSite=Strict"
@@ -1235,108 +1265,223 @@ DISPLAY-PAGE.
                 "SameSite=Strict; Max-Age=0"
     END-IF.
     DISPLAY " ".
-    DISPLAY "<!DOCTYPE html><html lang='ro'><head><meta charset='utf-8'>".
-    DISPLAY "<meta name='viewport' content='width=device-width, "
-            "initial-scale=1'>".
-    DISPLAY "<title>Ledger of Ages</title>".
-    DISPLAY "<style>body{font-family:sans-serif;"
-            "background:#f8fafc;padding:2rem;}".
-    DISPLAY ".card{background:white;border-radius:12px;padding:1.5rem;"
-            "margin:1rem auto;max-width:1000px;"
-            "box-shadow:0 2px 4px rgba(0,0,0,0.1);}".
-    DISPLAY "table{width:100%;border-collapse:collapse;}".
-    DISPLAY "th{text-align:left;background:#f1f5f9;padding:8px;}".
-    DISPLAY "td{padding:8px;border-bottom:1px solid #eee;}".
-    DISPLAY ".btn{background:#1e293b;color:white;border:none;"
-            "padding:8px 16px;border-radius:6px;cursor:pointer;"
-            "display:inline-block;font-size:0.9rem;}".
-    DISPLAY ".btn-del{background:#ef4444;}".
-    DISPLAY ".btn-edit{background:#0ea5e9;text-decoration:none;"
-            "padding:6px 12px;}".
-    DISPLAY ".err{background:#fee2e2;color:#991b1b;padding:12px;"
-            "border-radius:8px;margin:1rem auto;max-width:1000px;}".
-    DISPLAY "input,select{padding:6px;border:1px solid #cbd5e1;"
-            "border-radius:4px;}".
-    DISPLAY ".pos{color:#16a34a;}.neg{color:#dc2626;}".
-    DISPLAY "nav a{margin-right:14px;color:#1e293b;font-weight:600;"
-            "text-decoration:none;}nav a:hover{"
-            "text-decoration:underline;}".
-    DISPLAY ".barwrap{background:#f1f5f9;border-radius:4px;"
-            "overflow:hidden;height:8px;margin:3px 0;}".
-    DISPLAY ".bar-in{background:#16a34a;height:8px;}".
-    DISPLAY ".bar-ex{background:#dc2626;height:8px;}".
-    DISPLAY "@media (prefers-color-scheme: dark){".
-    DISPLAY "body{background:#0f172a;color:#e2e8f0;}".
-    DISPLAY ".card{background:#1e293b;box-shadow:0 2px 4px "
-            "rgba(0,0,0,0.4);}".
-    DISPLAY "th{background:#334155;color:#e2e8f0;}".
-    DISPLAY "td{border-bottom:1px solid #334155;}".
-    DISPLAY "input,select{background:#0f172a;color:#e2e8f0;"
-            "border-color:#475569;}".
-    DISPLAY "nav a{color:#e2e8f0;}".
-    DISPLAY ".btn{background:#475569;}".
-    DISPLAY ".btn-del{background:#b91c1c;}".
-    DISPLAY ".btn-edit{background:#0369a1;}".
-    DISPLAY ".err{background:#450a0a;color:#fecaca;}".
-    DISPLAY ".pos{color:#4ade80;}.neg{color:#f87171;}".
-    DISPLAY ".barwrap{background:#334155;}".
-    DISPLAY "}".
-    DISPLAY "</style></head><body>".
-
-    IF W-HAS-ERROR = "Y"
-        MOVE W-ERROR-MSG TO W-ESC-IN
-        PERFORM HTML-ESCAPE
-        DISPLAY "<div class='err'>&#9888; "
-                FUNCTION TRIM(W-ESC-OUT) "</div>"
-    END-IF.
-
+    DISPLAY "<!DOCTYPE html><html lang='ro'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<meta name='color-scheme' content='light dark'>"
+            "<title>Ledger of Ages · Finante personale</title>"
+            "<link rel='icon' href='/static/favicon.svg' type='image/svg+xml'>"
+            "<link rel='stylesheet' href='/static/app.css?v=3'>"
+            "<script defer src='/static/app.js?v=3'></script>"
+            "</head><body>"
+            "<a class='skip' href='#main'>Sari la continut</a>".
     IF W-LOGGED-IN = "N"
         PERFORM DISPLAY-LOGIN
     ELSE
         PERFORM DISPLAY-HEADER
+        DISPLAY "<main id='main' class='workspace' tabindex='-1'>"
+        PERFORM DISPLAY-NOTICE
         EVALUATE FUNCTION TRIM(W-VIEW)
             WHEN "REPORT"
+                DISPLAY "<header class='page-heading'><div>"
+                        "<p class='eyebrow'>PRIVIRE DE ANSAMBLU</p>"
+                        "<h1>Fiecare luna conteaza.</h1>"
+                        "<p>Vezi de unde vin banii si unde se duc.</p>"
+                        "</div><button class='btn secondary print' "
+                        "type='button' data-print>Imprima raportul</button></header>"
                 PERFORM DISPLAY-REPORT-VIEW
             WHEN "AUDIT"
+                DISPLAY "<header class='page-heading'><div>"
+                        "<p class='eyebrow'>TRANSPARENTA</p><h1>Activitatea ta.</h1>"
+                        "<p>Ultimele actiuni din registru, intr-un singur loc.</p>"
+                        "</div></header>"
                 PERFORM DISPLAY-AUDIT-VIEW
             WHEN OTHER
+                DISPLAY "<header class='page-heading'><div>"
+                        "<p class='eyebrow'>FINANTE PERSONALE / REGISTRU</p>"
+                        "<h1>Mai multa claritate.<br>Mai mult control.</h1>"
+                        "<p>Un loc pentru tot ce intra si tot ce iese.</p>"
+                        "</div><a class='btn' href='#transaction-form'>"
+                        "+ Adauga tranzactie</a></header>"
                 PERFORM DISPLAY-LEDGER-VIEW
         END-EVALUATE
+        DISPLAY "<footer class='page-footer'><span>LEDGER OF AGES</span>"
+                "<span>Construit in COBOL. Folosit in prezent.</span>"
+                "<button type='button' data-help>Scurtaturi tastatura</button>"
+                "</footer></main>"
     END-IF.
-    DISPLAY "</body></html>".
+    DISPLAY "<dialog id='delete-dialog' aria-labelledby='delete-title'>"
+            "<form method='dialog'><p class='eyebrow'>CONFIRMA ACTIUNEA</p>"
+            "<h2 id='delete-title'>Stergi tranzactia?</h2>"
+            "<p>Tranzactia va fi eliminata din registru. "
+            "Actiunea ramane in jurnalul de audit.</p>"
+            "<div class='dialog-actions'><button class='btn secondary' "
+            "value='cancel' autofocus>Anuleaza</button>"
+            "<button class='btn danger' value='confirm'>Sterge tranzactia</button>"
+            "</div></form></dialog>"
+            "<dialog id='help-dialog' aria-labelledby='help-title'>"
+            "<form method='dialog'><h2 id='help-title'>Mai rapid, din tastatura</h2>"
+            "<p><kbd>/</kbd> Cauta in descrieri</p>"
+            "<p><kbd>N</kbd> Adauga o tranzactie</p>"
+            "<p><kbd>?</kbd> Deschide acest ghid</p>"
+            "<p><kbd>Esc</kbd> Inchide dialogul</p>"
+            "<button class='btn'>Am inteles</button></form></dialog>"
+            "</body></html>".
+
+DISPLAY-NOTICE.
+    IF W-HAS-ERROR = "Y"
+        MOVE W-ERROR-MSG TO W-ESC-IN
+        PERFORM HTML-ESCAPE
+        DISPLAY "<div class='err' role='alert'>"
+                FUNCTION TRIM(W-ESC-OUT) "</div>"
+    END-IF.
+    EVALUATE W-NOTICE
+        WHEN "added"
+            DISPLAY "<div class='notice' role='status'>Tranzactie salvata.</div>"
+        WHEN "updated"
+            DISPLAY "<div class='notice' role='status'>Tranzactie actualizata.</div>"
+        WHEN "deleted"
+            DISPLAY "<div class='notice' role='status'>Tranzactie stearsa.</div>"
+    END-EVALUATE.
 
 DISPLAY-HEADER.
+PERFORM BUILD-NAV-QS.
     MOVE W-CFG-USER TO W-ESC-IN.
     PERFORM HTML-ESCAPE.
-    DISPLAY "<div class='card'><div style='display:flex;"
-            "justify-content:space-between;align-items:center;"
-            "flex-wrap:wrap;gap:8px;'>"
-            "<h1 style='margin:0'>Ledger of Ages</h1>"
-            "<nav><a href='?'>Tranzactii</a>"
-            "<a href='?view=REPORT'>Raport lunar</a>"
-            "<a href='?view=AUDIT'>Audit</a></nav>"
-            "<span>Logat ca <b>" FUNCTION TRIM(W-ESC-OUT) "</b> "
-            "<form method='POST' style='display:inline'>"
+    DISPLAY "<aside class='sidebar'><a class='brand' href='/'>"
+            "<span class='brand-mark'>L<span>·</span></span>"
+            "<span>Ledger<span class='brand-small'>OF AGES</span></span></a>"
+            "<p class='sidebar-label'>SPATIUL TAU FINANCIAR</p>"
+            "<nav aria-label='Navigare principala'>"
+            "<a data-nav='LEDGER' href='?" FUNCTION TRIM(W-QS) "'>"
+            "<span aria-hidden='true'>&#9638;</span> Tranzactii</a>"
+            "<a data-nav='REPORT' href='?view=REPORT&amp;"
+            FUNCTION TRIM(W-QS) "'>"
+            "<span aria-hidden='true'>&#8599;</span> Raport lunar</a>"
+            "<a data-nav='AUDIT' href='?view=AUDIT'>"
+            "<span aria-hidden='true'>&#9678;</span> Activitate</a></nav>"
+            "<div class='sidebar-note'><span class='status-dot'></span>"
+            "Precizie clasica.<br><b>Perspectiva moderna.</b>"
+            "<small>COBOL + ISAM</small></div>"
+            "<div class='account'><span class='avatar' aria-hidden='true'>"
+            "&#9673;</span><div><b>" FUNCTION TRIM(W-ESC-OUT) "</b>"
+            "<small>Registru personal</small></div>"
+            "<button type='button' class='theme-toggle' data-theme-toggle "
+            "aria-label='Schimba tema' title='Schimba tema'>&#9680;</button></div>"
+            "<form method='POST' class='logout-form'>"
             "<input type='hidden' name='csrf_token' value='"
             FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='logout'>"
-            "<button type='submit' class='btn'>Logout</button>"
-            "</form></span></div></div>".
+            "<button class='logout' type='submit'>Iesi din cont &#8594;</button>"
+            "</form></aside>".
 
 DISPLAY-LEDGER-VIEW.
-    PERFORM INITIALIZE-SUMMARY.
-    PERFORM DISPLAY-TOOLBAR.
-    MOVE 0 TO W-TOTAL-BALANCE.
-    MOVE 0 TO W-ROW-COUNT.
-    MOVE "N" TO W-EOF.
+PERFORM INITIALIZE-SUMMARY.
+    MOVE 0 TO W-TOTAL-BALANCE W-INCOME W-EXPENSE W-ROW-COUNT.
     PERFORM OPEN-LEDGER-FILE.
     IF FS-LEDGER = "00"
+        PERFORM COLLECT-TOTALS
+        PERFORM DISPLAY-METRICS
+        PERFORM DISPLAY-TOOLBAR
         PERFORM LOAD-EDIT-RECORD
         PERFORM DISPLAY-TABLE
         PERFORM CLOSE-LEDGER-FILE
         PERFORM DISPLAY-SUMMARY
+    ELSE
+        DISPLAY "<div class='err' role='alert'>Registrul este indisponibil.</div>"
     END-IF.
     PERFORM DISPLAY-ADD-FORM.
+
+COLLECT-TOTALS.
+    PERFORM START-SORTED-ROWS.
+    PERFORM UNTIL W-EOF = "Y"
+        PERFORM READ-SORTED-ROW
+        IF W-EOF NOT = "Y"
+            PERFORM CHECK-ROW-MATCH
+            IF W-ROW-MATCH = "Y"
+                ADD 1 TO W-ROW-COUNT
+                ADD TRANS-AMOUNT TO W-TOTAL-BALANCE
+                IF TRANS-AMOUNT >= 0
+                    ADD TRANS-AMOUNT TO W-INCOME
+                ELSE
+                    ADD TRANS-AMOUNT TO W-EXPENSE
+                END-IF
+                PERFORM UPDATE-CAT-TOTAL
+            END-IF
+        END-IF
+    END-PERFORM.
+    COMPUTE W-TOTAL-PAGES = FUNCTION MAX(1,
+        FUNCTION INTEGER((W-ROW-COUNT + W-PAGE-SIZE - 1) / W-PAGE-SIZE)).
+    IF W-PAGE > W-TOTAL-PAGES MOVE W-TOTAL-PAGES TO W-PAGE END-IF.
+
+START-SORTED-ROWS.
+    MOVE "N" TO W-EOF.
+    EVALUATE W-SORT-BY
+        WHEN "DATE_DESC"
+            MOVE HIGH-VALUES TO TRANS-DATE
+            START TRANSACTIONS-FILE KEY IS LESS THAN TRANS-DATE
+                INVALID KEY MOVE "Y" TO W-EOF
+            END-START
+        WHEN "DATE"
+            MOVE LOW-VALUES TO TRANS-DATE
+            START TRANSACTIONS-FILE KEY IS GREATER THAN TRANS-DATE
+                INVALID KEY MOVE "Y" TO W-EOF
+            END-START
+        WHEN "ID_DESC"
+            MOVE HIGH-VALUES TO TRANS-ID
+            START TRANSACTIONS-FILE KEY IS LESS THAN TRANS-ID
+                INVALID KEY MOVE "Y" TO W-EOF
+            END-START
+        WHEN OTHER
+            MOVE 0 TO TRANS-ID
+            START TRANSACTIONS-FILE KEY IS GREATER THAN TRANS-ID
+                INVALID KEY MOVE "Y" TO W-EOF
+            END-START
+    END-EVALUATE.
+
+READ-SORTED-ROW.
+    IF W-SORT-BY = "DATE_DESC" OR "ID_DESC"
+        READ TRANSACTIONS-FILE PREVIOUS
+            AT END MOVE "Y" TO W-EOF
+        END-READ
+    ELSE
+        READ TRANSACTIONS-FILE NEXT
+            AT END MOVE "Y" TO W-EOF
+        END-READ
+    END-IF.
+
+DISPLAY-METRICS.
+    DISPLAY "<section class='metrics' aria-label='Rezumat financiar'>".
+    MOVE W-TOTAL-BALANCE TO W-DISPLAY-TOTAL.
+    DISPLAY "<article class='metric metric-balance'><span class='metric-label'>"
+            "Sold net <span aria-hidden='true'>&#8599;</span></span>"
+            "<strong>" FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong>"
+            "<small>Venituri minus cheltuieli, pentru selectia curenta</small></article>".
+    MOVE W-INCOME TO W-DISPLAY-TOTAL.
+    DISPLAY "<article class='metric'><span class='metric-label'>Venituri "
+            "<span class='pos' aria-hidden='true'>+</span></span>"
+            "<strong class='pos'>" FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong>"
+            "<small>Sume intrate in registru</small></article>".
+    MOVE W-EXPENSE TO W-DISPLAY-TOTAL.
+    DISPLAY "<article class='metric'><span class='metric-label'>Cheltuieli "
+            "<span class='neg' aria-hidden='true'>&#8722;</span></span>"
+            "<strong>" FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong>"
+            "<small>Sume iesite din registru</small></article>".
+    DISPLAY "<article class='metric'><span class='metric-label'>Rata de economisire"
+            " <span aria-hidden='true'>%</span></span>".
+    IF W-INCOME > 0
+        COMPUTE W-SAVING-RATE ROUNDED = FUNCTION MAX(-999,
+            FUNCTION MIN(100, W-TOTAL-BALANCE * 100 / W-INCOME))
+        MOVE W-SAVING-RATE TO W-RATE-DISPLAY
+        IF W-TOTAL-BALANCE * 100 / W-INCOME < -999
+            DISPLAY "<strong>&lt; -999%</strong>"
+        ELSE
+            DISPLAY "<strong>" FUNCTION TRIM(W-RATE-DISPLAY) "%</strong>"
+        END-IF
+    ELSE
+        DISPLAY "<strong>&mdash;</strong>"
+    END-IF.
+    DISPLAY "<small>Cat din venituri ramane in soldul net</small>"
+            "</article></section>".
 
 LOAD-EDIT-RECORD.
     MOVE "N" TO W-EDIT-MODE.
@@ -1354,56 +1499,113 @@ LOAD-EDIT-RECORD.
     END-IF.
 
 DISPLAY-LOGIN.
-    DISPLAY "<div class='card' style='max-width:400px;margin-top:80px;'>"
-            "<h2>Login</h2>"
-            "<form method='POST'>"
+DISPLAY "<main id='main' class='login-layout'>"
+            "<section class='login-story'><a class='brand' href='/'>"
+            "<span class='brand-mark'>L<span>·</span></span>"
+            "<span>Ledger<span class='brand-small'>OF AGES</span></span></a>"
+            "<div><p class='eyebrow'>O PERSPECTIVA NOUA ASUPRA BANILOR TAI</p>"
+            "<h1>Obiceiuri bune.<br>Planuri mari.<br><em>Un registru simplu.</em></h1>"
+            "<p>Venituri, cheltuieli si decizii mai clare. "
+            "Finantele personale, in ritmul tau.</p>"
+            "<div class='ledger-art' aria-hidden='true'>"
+            "<span></span><span></span><span></span><span></span>"
+            "<span></span><span></span><span></span><span></span>"
+            "<span></span><span></span><span></span><span></span></div></div>"
+            "<p class='login-signature'>Din 1959, cu gandul la viitor. "
+            "<span>BUILT WITH COBOL</span></p></section>"
+            "<section class='login-panel'><div class='login-card'>"
+            "<p class='eyebrow'>BINE AI REVENIT</p><h2>Login</h2>"
+            "<p>Intra in spatiul tau financiar.</p>".
+    PERFORM DISPLAY-NOTICE.
+    DISPLAY "<form method='POST' class='login-form'>"
             "<input type='hidden' name='csrf_token' value='"
             FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='login'>"
-            "<p>User:<br>"
-            "<input type='text' name='user' required "
-            "maxlength='40' style='width:100%'></p>"
-            "<p>Parola:<br>"
-            "<input type='password' name='pass' required "
-            "maxlength='40' style='width:100%'></p>"
-            "<button type='submit' class='btn'>Intra</button>"
-            "</form></div>".
+            "<label for='login-user'>Utilizator</label>"
+            "<input id='login-user' type='text' name='user' required "
+            "maxlength='40' autocomplete='username' autofocus>"
+            "<label for='login-pass'>Parola</label>"
+            "<input id='login-pass' type='password' name='pass' required "
+            "maxlength='40' autocomplete='current-password'>"
+            "<button type='submit' class='btn'>Intra in cont &#8594;</button>"
+            "</form><p class='login-private'>Registrul tau este privat. "
+            "Accesul necesita autentificare.</p></div>"
+            "<button type='button' class='theme-toggle' data-theme-toggle "
+            "aria-label='Schimba tema'>&#9680; Schimba tema</button>"
+            "</section></main>".
 
 DISPLAY-TOOLBAR.
-    DISPLAY "<div class='card'><form method='GET' "
-            "style='display:flex;gap:10px;flex-wrap:wrap;"
-            "align-items:center;'>".
-    DISPLAY "Filtru: <select name='filter'>".
+DISPLAY "<section class='card filters' aria-labelledby='filter-title'>"
+            "<div class='section-heading'><h2 id='filter-title'>"
+            "Exploreaza registrul</h2><div class='range-presets' "
+            "aria-label='Intervale rapide'>"
+            "<button type='button' data-range='month'>Luna aceasta</button>"
+            "<button type='button' data-range='previous'>Luna trecuta</button>"
+            "<button type='button' data-range='year'>Anul acesta</button>"
+            "<a href='?'>Reseteaza</a></div></div>"
+            "<form method='GET' id='filter-form' class='filter-grid'>".
+    IF W-VIEW = "REPORT"
+        DISPLAY "<input type='hidden' name='view' value='REPORT'>"
+    END-IF.
+    MOVE W-SEARCH-Q TO W-ESC-IN.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<label class='search-field' for='search'>Descriere"
+            "<input id='search' type='search' name='q' maxlength='30' "
+            "placeholder='Cauta o tranzactie...' value='"
+            FUNCTION TRIM(W-ESC-OUT) "' autocomplete='off'></label>"
+            "<label for='filter-cat'>Categorie<select id='filter-cat' name='filter'>".
     IF W-FILTER-CAT = "ALL"
-        DISPLAY "<option value='ALL' selected>Toate</option>"
+        DISPLAY "<option value='ALL' selected>Toate categoriile</option>"
     ELSE
-        DISPLAY "<option value='ALL'>Toate</option>"
+        DISPLAY "<option value='ALL'>Toate categoriile</option>"
     END-IF.
     MOVE W-FILTER-CAT TO W-OPT-CURRENT.
     PERFORM DISPLAY-CAT-OPTIONS.
-    DISPLAY "</select>".
-    DISPLAY "Sort: <select name='sort'>".
-    IF W-SORT-BY(1:4) = "DATE"
-        DISPLAY "<option value='ID'>ID</option>"
-                "<option value='DATE' selected>Data</option>"
+    DISPLAY "</select></label>"
+            "<label for='filter-kind'>Tip<select id='filter-kind' name='kind'>".
+    DISPLAY "<option value='ALL'>Toate tranzactiile</option>".
+    IF W-KIND = "INCOME"
+        DISPLAY "<option value='INCOME' selected>Doar venituri</option>"
     ELSE
-        DISPLAY "<option value='ID' selected>ID</option>"
-                "<option value='DATE'>Data</option>"
+        DISPLAY "<option value='INCOME'>Doar venituri</option>"
     END-IF.
-    DISPLAY "</select>".
-    DISPLAY "De la: <input type='date' name='from' value='"
-            FUNCTION TRIM(W-FROM-DATE) "'>".
-    DISPLAY "Pana la: <input type='date' name='to' value='"
-            FUNCTION TRIM(W-TO-DATE) "'>".
-    MOVE W-SEARCH-Q TO W-ESC-IN.
-    PERFORM HTML-ESCAPE.
-    DISPLAY "Cauta: <input type='text' name='q' maxlength='30' "
-            "placeholder='descriere...' value='"
-            FUNCTION TRIM(W-ESC-OUT) "'>".
-    DISPLAY "<button type='submit' class='btn'>Aplica</button>".
-    DISPLAY "<button type='submit' class='btn' name='export' "
-            "value='csv'>Export CSV</button>".
-    DISPLAY "</form></div>".
+    IF W-KIND = "EXPENSE"
+        DISPLAY "<option value='EXPENSE' selected>Doar cheltuieli</option>"
+    ELSE
+        DISPLAY "<option value='EXPENSE'>Doar cheltuieli</option>"
+    END-IF.
+    DISPLAY "</select></label><label for='filter-sort'>Ordine"
+            "<select id='filter-sort' name='sort'>".
+    IF W-SORT-BY = "ID"
+        DISPLAY "<option value='ID' selected>ID crescator</option>"
+    ELSE
+        DISPLAY "<option value='ID'>ID crescator</option>"
+    END-IF.
+    IF W-SORT-BY = "ID_DESC"
+        DISPLAY "<option value='ID_DESC' selected>ID descrescator</option>"
+    ELSE
+        DISPLAY "<option value='ID_DESC'>ID descrescator</option>"
+    END-IF.
+    IF W-SORT-BY = "DATE"
+        DISPLAY "<option value='DATE' selected>Data crescator</option>"
+    ELSE
+        DISPLAY "<option value='DATE'>Data crescator</option>"
+    END-IF.
+    IF W-SORT-BY = "DATE_DESC"
+        DISPLAY "<option value='DATE_DESC' selected>Cele mai recente</option>"
+    ELSE
+        DISPLAY "<option value='DATE_DESC'>Cele mai recente</option>"
+    END-IF.
+    DISPLAY "</select></label><label for='filter-from'>De la"
+            "<input id='filter-from' type='date' name='from' value='"
+            FUNCTION TRIM(W-FROM-DATE) "'></label>"
+            "<label for='filter-to'>Pana la"
+            "<input id='filter-to' type='date' name='to' value='"
+            FUNCTION TRIM(W-TO-DATE) "'></label>"
+            "<div class='filter-actions'><button type='submit' class='btn'>"
+            "Aplica filtrele</button><button type='submit' class='btn secondary' "
+            "name='export' value='csv'>Export CSV &#8595;</button></div>"
+            "</form></section>".
 
 DISPLAY-CAT-OPTIONS.
     PERFORM VARYING CAT-IDX FROM 1 BY 1 UNTIL CAT-IDX > 5
@@ -1419,55 +1621,69 @@ DISPLAY-CAT-OPTIONS.
     END-PERFORM.
 
 DISPLAY-ADD-FORM.
-    IF W-EDIT-MODE = "Y"
+IF W-EDIT-MODE = "Y"
         PERFORM DISPLAY-EDIT-FORM
         EXIT PARAGRAPH
     END-IF.
-    DISPLAY "<div class='card'><h2>Adauga tranzactie</h2>"
-            "<form method='POST'>"
+    DISPLAY "<section class='card transaction-form' id='transaction-form'>"
+            "<div class='section-heading'><div><p class='eyebrow'>UN PAS MIC, ZILNIC</p>"
+            "<h2>Adauga tranzactie</h2></div>"
+            "<span class='muted'>+ venit / &minus; cheltuiala</span></div>"
+            "<form method='POST' class='entry-grid'>"
             "<input type='hidden' name='csrf_token' value='"
             FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='add'>"
-            "Data: <input type='date' name='date' value='"
-            W-TODAY-STR "' required> "
-            "Cat: <select name='cat'>".
-    MOVE SPACES TO W-OPT-CURRENT.
+            "<label for='entry-date'>Data<input id='entry-date' type='date' "
+            "name='date' value='" W-TODAY-STR "' required></label>"
+            "<label for='entry-cat'>Categorie<select id='entry-cat' name='cat'>".
+    MOVE W-CAT-RAW TO W-OPT-CURRENT.
     PERFORM DISPLAY-CAT-OPTIONS.
-    DISPLAY "</select> "
-            "Desc: <input type='text' name='desc' required "
-            "maxlength='30'> "
-            "Suma: <input type='number' name='amount' "
-            "step='0.01' required min='-9999999.99' "
-            "max='9999999.99'> "
-            "<button type='submit' class='btn'>Salveaza</button>"
-            "</form></div>".
+    PERFORM DISPLAY-ENTRY-FIELDS.
+
+DISPLAY-ENTRY-FIELDS.
+    DISPLAY "</select></label><label class='description-field' for='entry-desc'>"
+            "Descriere".
+    IF W-EDIT-MODE = "Y"
+        MOVE W-EDIT-DESC TO W-ESC-IN
+    ELSE
+        MOVE W-DESC-RAW TO W-ESC-IN
+    END-IF.
+    PERFORM HTML-ESCAPE.
+    DISPLAY "<input id='entry-desc' type='text' name='desc' required maxlength='30' "
+            "placeholder='De exemplu, cumparaturi saptamanale' value='"
+            FUNCTION TRIM(W-ESC-OUT) "'></label>"
+            "<label for='entry-amount'>Suma<input id='entry-amount' type='number' "
+            "name='amount' step='0.01' required min='-9999999.99' max='9999999.99' "
+            "placeholder='-125.00' value='" WITH NO ADVANCING.
+    IF W-EDIT-MODE = "Y"
+        DISPLAY FUNCTION TRIM(W-EDIT-AMT-STR) "'></label>"
+    ELSE
+        MOVE W-AMOUNT-RAW TO W-ESC-IN
+        PERFORM HTML-ESCAPE
+        DISPLAY FUNCTION TRIM(W-ESC-OUT) "'></label>"
+    END-IF.
+    DISPLAY "<div class='entry-actions'><button type='submit' class='btn'>".
+    IF W-EDIT-MODE = "Y"
+        DISPLAY "Actualizeaza</button><a href='?' class='btn secondary'>Anuleaza</a>"
+    ELSE
+        DISPLAY "Salveaza tranzactia</button>"
+    END-IF.
+    DISPLAY "</div></form></section>".
 
 DISPLAY-EDIT-FORM.
-    MOVE W-EDIT-DESC TO W-ESC-IN.
-    PERFORM HTML-ESCAPE.
-    DISPLAY "<div class='card'><h2>Editeaza tranzactia #"
-            W-EDIT-ID "</h2>"
-            "<form method='POST'>"
+DISPLAY "<section class='card transaction-form' id='transaction-form'>"
+            "<h2>Editeaza tranzactia #" W-EDIT-ID "</h2>"
+            "<form method='POST' class='entry-grid'>"
             "<input type='hidden' name='csrf_token' value='"
             FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='update'>"
             "<input type='hidden' name='id' value='" W-EDIT-ID "'>"
-            "Data: <input type='date' name='date' value='"
-            W-EDIT-DATE "' required> "
-            "Cat: <select name='cat'>".
+            "<label for='entry-date'>Data<input id='entry-date' type='date' "
+            "name='date' value='" W-EDIT-DATE "' required></label>"
+            "<label for='entry-cat'>Categorie<select id='entry-cat' name='cat'>".
     MOVE W-EDIT-CAT TO W-OPT-CURRENT.
     PERFORM DISPLAY-CAT-OPTIONS.
-    DISPLAY "</select> "
-            "Desc: <input type='text' name='desc' required "
-            "maxlength='30' value='" FUNCTION TRIM(W-ESC-OUT) "'> "
-            "Suma: <input type='number' name='amount' "
-            "step='0.01' required min='-9999999.99' "
-            "max='9999999.99' value='"
-            FUNCTION TRIM(W-EDIT-AMT-STR) "'> "
-            "<button type='submit' class='btn'>Actualizeaza</button> "
-            "<a href='?' class='btn' style='background:#64748b;"
-            "text-decoration:none'>Anuleaza</a>"
-            "</form></div>".
+    PERFORM DISPLAY-ENTRY-FIELDS.
 
 INITIALIZE-SUMMARY.
     MOVE "Venituri"  TO CAT-NAME(1).
@@ -1479,60 +1695,59 @@ INITIALIZE-SUMMARY.
               CAT-TOTAL(4) CAT-TOTAL(5).
 
 DISPLAY-TABLE.
-    DISPLAY "<div class='card' style='padding:0;'><table><thead><tr>"
-            "<th>ID</th><th>Data</th><th>Cat</th><th>Desc</th>"
-            "<th style='text-align:right'>Suma</th><th></th>"
-            "</tr></thead><tbody>".
-    IF W-SORT-BY(1:4) = "DATE"
-        MOVE LOW-VALUES TO TRANS-DATE
-        START TRANSACTIONS-FILE KEY IS GREATER THAN TRANS-DATE
-            INVALID KEY MOVE "Y" TO W-EOF
-        END-START
-    ELSE
-        MOVE 0 TO TRANS-ID
-        START TRANSACTIONS-FILE KEY IS GREATER THAN TRANS-ID
-            INVALID KEY MOVE "Y" TO W-EOF
-        END-START
+MOVE W-ROW-COUNT TO W-DISPLAY-COUNT.
+    DISPLAY "<section class='card transaction-list' aria-labelledby='list-title'>"
+            "<div class='section-heading'><h2 id='list-title'>Tranzactii</h2>"
+            "<span class='count-badge'>" FUNCTION TRIM(W-DISPLAY-COUNT)
+            " inregistrari</span></div>".
+    IF W-ROW-COUNT = 0
+        DISPLAY "<div class='empty-state'><span aria-hidden='true'>&#8599;</span>"
+                "<h3>Loc pentru un nou inceput.</h3>"
+                "<p>Nicio tranzactie pentru filtrele alese. "
+                "Adauga prima inregistrare sau schimba filtrele.</p>"
+                "<a href='#transaction-form' class='btn secondary'>"
+                "+ Adauga prima tranzactie</a></div>"
     END-IF.
+    DISPLAY "<div class='table-scroll'><table class='ledger-table'>"
+            "<caption class='sr-only'>Tranzactiile din selectia curenta</caption>"
+            "<thead><tr><th scope='col'>ID</th><th scope='col'>Data</th>"
+            "<th scope='col'>Categorie</th><th scope='col'>Descriere</th>"
+            "<th scope='col' class='amount'>Suma</th>"
+            "<th scope='col'><span class='sr-only'>Actiuni</span></th>"
+            "</tr></thead><tbody>".
+    PERFORM START-SORTED-ROWS.
+    MOVE 0 TO W-SCAN-COUNT.
     COMPUTE W-PAGE-START = (W-PAGE - 1) * W-PAGE-SIZE + 1.
     COMPUTE W-PAGE-END = W-PAGE * W-PAGE-SIZE.
     PERFORM UNTIL W-EOF = "Y"
-        READ TRANSACTIONS-FILE NEXT
-            AT END MOVE "Y" TO W-EOF
-            NOT AT END
-                PERFORM CHECK-ROW-MATCH
-                IF W-ROW-MATCH = "Y"
-                    ADD 1 TO W-ROW-COUNT
-                    IF W-ROW-COUNT >= W-PAGE-START
-                       AND W-ROW-COUNT <= W-PAGE-END
-                        PERFORM RENDER-ROW
-                    END-IF
-                    ADD TRANS-AMOUNT TO W-TOTAL-BALANCE
-                    PERFORM UPDATE-CAT-TOTAL
+        PERFORM READ-SORTED-ROW
+        IF W-EOF NOT = "Y"
+            PERFORM CHECK-ROW-MATCH
+            IF W-ROW-MATCH = "Y"
+                ADD 1 TO W-SCAN-COUNT
+                IF W-SCAN-COUNT >= W-PAGE-START
+                   AND W-SCAN-COUNT <= W-PAGE-END
+                    PERFORM RENDER-ROW
                 END-IF
-        END-READ
+            END-IF
+        END-IF
     END-PERFORM.
     MOVE W-TOTAL-BALANCE TO W-DISPLAY-TOTAL.
-    MOVE W-ROW-COUNT TO W-DISPLAY-COUNT.
-    DISPLAY "</tbody><tfoot><tr>"
-            "<td colspan='4'><b>Total ("
+    DISPLAY "</tbody><tfoot><tr><td colspan='4'><b>Total ("
             FUNCTION TRIM(W-DISPLAY-COUNT) " tranzactii)</b></td>"
-            "<td style='text-align:right'><b>"
-            W-DISPLAY-TOTAL "</b></td><td></td></tr></tfoot>"
-            "</table></div>".
+            "<td class='amount'><b>" FUNCTION TRIM(W-DISPLAY-TOTAL)
+            "</b></td><td></td></tr></tfoot></table></div>".
     PERFORM DISPLAY-PAGINATION.
+    DISPLAY "</section>".
 
 DISPLAY-PAGINATION.
-    COMPUTE W-TOTAL-PAGES =
-        (W-ROW-COUNT + W-PAGE-SIZE - 1) / W-PAGE-SIZE.
     IF W-TOTAL-PAGES < 2
         EXIT PARAGRAPH
     END-IF.
     PERFORM BUILD-NAV-QS.
     MOVE W-PAGE TO W-PAGE-D.
     MOVE W-TOTAL-PAGES TO W-PAGES-D.
-    DISPLAY "<div class='card' style='display:flex;gap:14px;"
-            "align-items:center;justify-content:center;'>".
+    DISPLAY "<nav class='pagination' aria-label='Paginare'>".
     IF W-PAGE > 1
         COMPUTE W-PGLNK-D = W-PAGE - 1
         DISPLAY "<a class='btn' style='text-decoration:none' href='?"
@@ -1547,7 +1762,7 @@ DISPLAY-PAGINATION.
                 FUNCTION TRIM(W-QS) "&page="
                 FUNCTION TRIM(W-PGLNK-D) "'>Inainte &raquo;</a>"
     END-IF.
-    DISPLAY "</div>".
+    DISPLAY "</nav>".
 
 BUILD-NAV-QS.
 *>  Query string cu filtrele curente pentru linkurile de paginare.
@@ -1560,6 +1775,7 @@ BUILD-NAV-QS.
     MOVE W-SORT-BY TO W-ENC-IN.
     PERFORM URL-ENCODE.
     STRING FUNCTION TRIM(W-QS)
+           "&kind=" FUNCTION TRIM(W-KIND)
            "&sort=" FUNCTION TRIM(W-ENC-OUT)
            "&from=" FUNCTION TRIM(W-FROM-DATE)
            "&to=" FUNCTION TRIM(W-TO-DATE)
@@ -1610,6 +1826,12 @@ URL-ENCODE.
 
 CHECK-ROW-MATCH.
     MOVE "Y" TO W-ROW-MATCH.
+    IF W-KIND = "INCOME" AND TRANS-AMOUNT <= 0
+        MOVE "N" TO W-ROW-MATCH
+    END-IF.
+    IF W-KIND = "EXPENSE" AND TRANS-AMOUNT >= 0
+        MOVE "N" TO W-ROW-MATCH
+    END-IF.
     IF W-FILTER-CAT NOT = "ALL" AND W-FILTER-CAT NOT = TRANS-CAT
         MOVE "N" TO W-ROW-MATCH
     END-IF.
@@ -1630,36 +1852,37 @@ CHECK-ROW-MATCH.
     END-IF.
 
 RENDER-ROW.
-    DISPLAY "<tr><td>#" TRANS-ID "</td>".
+DISPLAY "<tr data-transaction='" TRANS-ID "'>"
+            "<td data-label='ID' class='row-id'>#" TRANS-ID "</td>".
     MOVE TRANS-DATE TO W-ESC-IN.
     PERFORM HTML-ESCAPE.
-    DISPLAY "<td>" FUNCTION TRIM(W-ESC-OUT) "</td>".
+    DISPLAY "<td data-label='Data'>" FUNCTION TRIM(W-ESC-OUT) "</td>".
     MOVE TRANS-CAT TO W-ESC-IN.
     PERFORM HTML-ESCAPE.
-    DISPLAY "<td>" FUNCTION TRIM(W-ESC-OUT) "</td>".
+    DISPLAY "<td data-label='Categorie'><span class='category'>"
+            FUNCTION TRIM(W-ESC-OUT) "</span></td>".
     MOVE TRANS-DESC TO W-ESC-IN.
     PERFORM HTML-ESCAPE.
-    DISPLAY "<td>" FUNCTION TRIM(W-ESC-OUT) "</td>".
+    DISPLAY "<td data-label='Descriere' class='row-description'>"
+            FUNCTION TRIM(W-ESC-OUT) "</td>".
     MOVE TRANS-AMOUNT TO W-DISPLAY-AMOUNT.
     IF TRANS-AMOUNT < 0
-        DISPLAY "<td class='neg' style='text-align:right'>"
-                W-DISPLAY-AMOUNT "</td>"
+        DISPLAY "<td data-label='Suma' class='neg amount'>"
+                FUNCTION TRIM(W-DISPLAY-AMOUNT) "</td>"
     ELSE
-        DISPLAY "<td class='pos' style='text-align:right'>"
-                W-DISPLAY-AMOUNT "</td>"
+        DISPLAY "<td data-label='Suma' class='pos amount'>"
+                "+" FUNCTION TRIM(W-DISPLAY-AMOUNT) "</td>"
     END-IF.
-    DISPLAY "<td style='white-space:nowrap'>"
-            "<a class='btn btn-edit' href='?edit=" TRANS-ID
-            "'>Edit</a> "
-            "<form method='POST' style='margin:0;display:inline'>"
+    DISPLAY "<td class='row-actions'><a class='btn btn-edit' "
+            "aria-label='Editeaza tranzactia " TRANS-ID "' href='?edit="
+            TRANS-ID "#transaction-form'>Editeaza</a>"
+            "<form method='POST' data-delete>"
             "<input type='hidden' name='csrf_token' value='"
             FUNCTION TRIM(W-CSRF-TOKEN) "'>"
             "<input type='hidden' name='cmd' value='del'>"
             "<input type='hidden' name='id' value='" TRANS-ID "'>"
-            "<button type='submit' class='btn btn-del' "
-            "onclick='return confirm(&quot;Sterg aceasta "
-            "tranzactie?&quot;)'>X</button>"
-            "</form></td></tr>".
+            "<button type='submit' class='btn btn-del' aria-label='Sterge tranzactia "
+            TRANS-ID "'>Sterge</button></form></td></tr>".
 
 UPDATE-CAT-TOTAL.
     SET CAT-IDX TO 1.
@@ -1669,18 +1892,15 @@ UPDATE-CAT-TOTAL.
     END-SEARCH.
 
 DISPLAY-SUMMARY.
-    DISPLAY "<div style='display:flex;gap:1rem;max-width:1000px;"
-            "margin:1rem auto;'>".
+DISPLAY "<section class='category-summary' aria-label='Solduri pe categorii'>".
     PERFORM VARYING CAT-IDX FROM 1 BY 1 UNTIL CAT-IDX > 5
         MOVE CAT-TOTAL(CAT-IDX) TO W-DISPLAY-TOTAL
-        MOVE CAT-NAME(CAT-IDX) TO W-ESC-IN
-        PERFORM HTML-ESCAPE
-        DISPLAY "<div class='card' style='flex:1;text-align:center;"
-                "margin:0;'><div>" FUNCTION TRIM(W-ESC-OUT) "</div>"
-                "<strong>" FUNCTION TRIM(W-DISPLAY-TOTAL)
-                "</strong></div>"
+        DISPLAY "<a class='category-card' href='?filter="
+                FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'><span>"
+                FUNCTION TRIM(CAT-NAME(CAT-IDX)) "</span><strong>"
+                FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong></a>"
     END-PERFORM.
-    DISPLAY "</div>".
+    DISPLAY "</section>".
 
 EXPORT-CSV.
     DISPLAY "Content-Type: text/csv; charset=utf-8".
@@ -1744,6 +1964,8 @@ CSV-ESCAPE.
     END-PERFORM.
 
 DISPLAY-REPORT-VIEW.
+    PERFORM INITIALIZE-SUMMARY.
+    PERFORM DISPLAY-TOOLBAR.
     MOVE 0 TO MONTH-COUNT.
     MOVE 0 TO W-MAX-FLOW.
     PERFORM OPEN-LEDGER-FILE.
@@ -1751,11 +1973,18 @@ DISPLAY-REPORT-VIEW.
         PERFORM BUILD-REPORT
         PERFORM CLOSE-LEDGER-FILE
     END-IF.
-    DISPLAY "<div class='card'><h2>Raport lunar</h2>".
+    DISPLAY "<section class='card report'><div class='section-heading'>"
+            "<h2>Raport lunar</h2><span class='muted'>Venituri / cheltuieli / net</span>"
+            "</div>".
+    IF W-REPORT-OVERFLOW = "Y"
+        DISPLAY "<p role='alert'>Interval prea mare. Alege cel mult 1200 de luni.</p>"
+                "</section>"
+        EXIT PARAGRAPH
+    END-IF.
     IF MONTH-COUNT = 0
         DISPLAY "<p>Nu exista tranzactii.</p>"
     ELSE
-        DISPLAY "<table><thead><tr><th>Luna</th>"
+        DISPLAY "<div class='table-scroll'><table><thead><tr><th>Luna</th>"
                 "<th style='text-align:right'>Venituri</th>"
                 "<th style='text-align:right'>Cheltuieli</th>"
                 "<th style='text-align:right'>Net</th>"
@@ -1765,9 +1994,9 @@ DISPLAY-REPORT-VIEW.
                 UNTIL W-M-IDX > MONTH-COUNT
             PERFORM RENDER-REPORT-ROW
         END-PERFORM
-        DISPLAY "</tbody></table>"
+        DISPLAY "</tbody></table></div>"
     END-IF.
-    DISPLAY "</div>".
+    DISPLAY "</section>".
 
 BUILD-REPORT.
     MOVE "N" TO W-EOF.
@@ -1778,7 +2007,9 @@ BUILD-REPORT.
     PERFORM UNTIL W-EOF = "Y"
         READ TRANSACTIONS-FILE NEXT
             AT END MOVE "Y" TO W-EOF
-            NOT AT END PERFORM ACCUMULATE-MONTH
+            NOT AT END
+                PERFORM CHECK-ROW-MATCH
+                IF W-ROW-MATCH = "Y" PERFORM ACCUMULATE-MONTH END-IF
         END-READ
     END-PERFORM.
     PERFORM VARYING W-M-IDX FROM 1 BY 1 UNTIL W-M-IDX > MONTH-COUNT
@@ -1799,7 +2030,7 @@ ACCUMULATE-MONTH.
             PERFORM START-NEW-MONTH
         END-IF
     END-IF.
-    IF MONTH-COUNT = 0
+    IF MONTH-COUNT = 0 OR W-REPORT-OVERFLOW = "Y"
         EXIT PARAGRAPH
     END-IF.
     IF TRANS-AMOUNT >= 0
@@ -1809,11 +2040,13 @@ ACCUMULATE-MONTH.
     END-IF.
 
 START-NEW-MONTH.
-    IF MONTH-COUNT < 120
+    IF MONTH-COUNT < 1200
         ADD 1 TO MONTH-COUNT
         MOVE TRANS-DATE(1:7) TO MONTH-KEY(MONTH-COUNT)
         MOVE 0 TO MONTH-INCOME(MONTH-COUNT)
         MOVE 0 TO MONTH-EXPENSE(MONTH-COUNT)
+    ELSE
+        MOVE "Y" TO W-REPORT-OVERFLOW
     END-IF.
 
 RENDER-REPORT-ROW.
@@ -1876,7 +2109,7 @@ DISPLAY-AUDIT-VIEW.
     IF W-AR-TOTAL = 0
         DISPLAY "<p>Nicio intrare inca.</p>"
     ELSE
-        DISPLAY "<table><thead><tr><th>Timp</th><th>IP</th>"
+        DISPLAY "<div class='table-scroll'><table><thead><tr><th>Timp</th><th>IP</th>"
                 "<th>Actiune</th><th>Detalii</th>"
                 "</tr></thead><tbody>"
         IF W-AR-TOTAL > 30
@@ -1889,7 +2122,7 @@ DISPLAY-AUDIT-VIEW.
             COMPUTE W-AR-IDX = FUNCTION MOD(W-AR-K - 1, 30) + 1
             PERFORM RENDER-AUDIT-ROW
         END-PERFORM
-        DISPLAY "</tbody></table>"
+        DISPLAY "</tbody></table></div>"
     END-IF.
     DISPLAY "</div>".
 

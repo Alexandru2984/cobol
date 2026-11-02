@@ -42,3 +42,12 @@ health și smoke checks pe domeniul public. Commit distinct după fiecare etapă
 Etapa 4 este backlog, nu funcționalitate livrată. Funcțiile care schimbă schema ISAM
 necesită migrare versionată și test de restaurare înainte de activare. Multi-user
 necesită model de ownership, autorizare pe fiecare obiect și teste de izolare.
+
+## Livrat în etapele 1–2
+
+CSRF semnat, cookie `__Host-`, entropie OS, validare strictă, serializare ISAM,
+protecție CSV și scrypt opțional. UI responsive, temă persistentă, KPI-uri și rată
+de economisire, filtrare venit/cheltuială, patru sortări, intervale rapide,
+rapoarte filtrate, carduri pe mobil, confirmare accesibilă, scurtături, print,
+stări goale, feedback și redirect după salvare. Data formularului folosește
+Europe/Bucharest; expirarea sesiunilor se calculează în UTC.

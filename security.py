@@ -18,7 +18,7 @@ CATEGORIES = {"Venituri", "Locuinta", "Mancare", "Hobby", "Utilitati"}
 FORM_LIMITS = {"cmd": 20, "user": 40, "pass": 40, "date": 10, "cat": 15,
                "desc": 30, "amount": 20, "id": 6, "csrf_token": 300}
 QUERY_LIMITS = {"filter": 15, "sort": 10, "from": 10, "to": 10,
-                "view": 10, "export": 3, "edit": 6, "q": 30, "page": 4,
+                "view": 10, "export": 3, "edit": 6, "q": 30, "page": 5, "notice": 8,
                 "kind": 7}
 
 
