@@ -7,6 +7,7 @@ din data/ nu sunt atinse niciodata de teste.
 import importlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -23,12 +24,16 @@ PASS = "secret123"
 def workdir(tmp_path_factory):
     wd = tmp_path_factory.mktemp("ledger")
     (wd / "data").mkdir()
-    subprocess.run(
-        ["cobc", "-x", "-free", os.path.join(ROOT, "ledger.cbl"),
-         os.path.join(ROOT, "sha256.cbl"),
-         "-o", str(wd / "ledger.cgi")],
-        check=True,
-    )
+    tested_binary = os.environ.get("LEDGER_TEST_BIN")
+    if tested_binary:
+        shutil.copy2(tested_binary, wd / "ledger.cgi")
+    else:
+        subprocess.run(
+            ["cobc", "-x", "-free", os.path.join(ROOT, "ledger.cbl"),
+             os.path.join(ROOT, "sha256.cbl"),
+             "-o", str(wd / "ledger.cgi")],
+            check=True,
+        )
     return wd
 
 
@@ -510,3 +515,20 @@ def test_raw_success_redirect_prevents_refresh_resubmission(client):
     response = raw.post("/", data={"cmd": "login", "user": USER, "pass": PASS, "csrf_token": token})
     assert response.status_code == 303
     assert response.headers["Location"] == "/"
+
+
+def test_backup_restore_and_tampering_detection(client, workdir, tmp_path):
+    _, headers = login(client)
+    add(client, headers, "2026-07-01", "Hobby", "restore proof", "-12.34")
+    destination = tmp_path / "snapshots"
+    env = {**os.environ, "LEDGER_APP_DIR": str(workdir), "LEDGER_BACKUP_DIR": str(destination)}
+    subprocess.run([os.path.join(ROOT, "backup.sh")], env=env, check=True, capture_output=True)
+    archive = next(destination.glob("*.tar.gz"))
+    verifier = [sys.executable, os.path.join(ROOT, "ops", "verify-backup.py"), str(archive)]
+    check = subprocess.run(verifier, capture_output=True, check=True)
+    assert b"RESTORE_CHECK_OK" in check.stdout
+    # A corrupted archive is rejected before extraction.
+    with archive.open("ab") as stream:
+        stream.write(b"tampered")
+    assert subprocess.run(verifier, capture_output=True).returncode != 0
+    assert b"restore proof" in client.get("/", headers=headers).data

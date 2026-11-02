@@ -1,16 +1,46 @@
-#!/bin/bash
-set -euo pipefail
-
-cd /home/micu/cobol
-mkdir -p data/backups
-
-STAMP=$(date +%Y%m%d-%H%M%S)
-
-for f in data/ledger.dat data/ledger.dat.1 data/audit.log; do
-    if [ -f "$f" ]; then
-        cp "$f" "data/backups/$(basename "$f").$STAMP"
+#!/usr/bin/env bash
+# Consistent ISAM snapshot; coordinates with every CGI request through flock.
+set -Eeuo pipefail
+umask 077
+APP_DIR=${LEDGER_APP_DIR:-/srv/canary/cobol.micutu.com/app}
+BACKUP_DIR=${LEDGER_BACKUP_DIR:-/srv/backups/cobol-ledger}
+RETENTION_DAYS=${LEDGER_BACKUP_RETENTION_DAYS:-14}
+[[ $RETENTION_DAYS =~ ^[1-9][0-9]*$ ]] || exit 2
+[[ -d $APP_DIR/data && ! -L $APP_DIR/data/.ledger.lock ]] || exit 2
+mkdir -p -- "$BACKUP_DIR"
+# Resolve the destination before checking that backups are outside the data tree.
+BACKUP_DIR=$(cd -- "$BACKUP_DIR" && pwd -P)
+DATA_DIR=$(cd -- "$APP_DIR/data" && pwd -P)
+case "$BACKUP_DIR/" in "$DATA_DIR/"*) echo 'Backup destination must be outside data/' >&2; exit 2;; esac
+stamp=$(date -u +'%Y-%m-%dT%H%M%S-%NZ')
+name="cobol-ledger-${stamp}.tar.gz"
+staging=$(mktemp -d "${BACKUP_DIR}/.snapshot.XXXXXX")
+trap 'rm -rf -- "$staging"' EXIT
+exec 9>>"$DATA_DIR/.ledger.lock"
+if (( EUID == 0 )); then
+    chown --reference="$DATA_DIR" "/proc/$$/fd/9"
+fi
+flock -x -w 30 9
+for database in ledger.dat ledger.dat.1 sessions.dat lockout.dat; do
+    if [[ -e $DATA_DIR/$database ]]; then
+        [[ -f $DATA_DIR/$database && ! -L $DATA_DIR/$database ]] || exit 2
+        db5.3_verify -q "$DATA_DIR/$database"
     fi
 done
-
-# Retain 7 days
-find data/backups \( -name 'ledger.dat*' -o -name 'audit.log*' \) -type f -mtime +7 -delete
+tar --one-file-system --exclude='data/backups' --exclude='data/.ledger.lock' \
+    -C "$APP_DIR" -czf "$staging/$name" data
+flock -u 9
+gzip -t "$staging/$name"
+tar -xzf "$staging/$name" -C "$staging"
+for database in ledger.dat ledger.dat.1 sessions.dat lockout.dat; do
+    if [[ -f $staging/data/$database ]]; then
+        db5.3_verify -q "$staging/data/$database"
+    fi
+done
+(cd -- "$staging" && sha256sum "$name" > "$name.sha256")
+mv -- "$staging/$name" "$BACKUP_DIR/$name"
+mv -- "$staging/$name.sha256" "$BACKUP_DIR/$name.sha256"
+find "$BACKUP_DIR" -xdev -maxdepth 1 -type f \
+    \( -name 'cobol-ledger-*.tar.gz' -o -name 'cobol-ledger-*.tar.gz.sha256' \) \
+    -mtime +"$RETENTION_DAYS" -delete
+printf 'Verified backup: %s/%s\n' "$BACKUP_DIR" "$name"

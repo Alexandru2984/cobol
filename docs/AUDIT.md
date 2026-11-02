@@ -82,3 +82,23 @@ al paginii; login, adăugare/editare/ștergere, dialog, temă persistentă, rapo
 filtre rapide, tastatură și logout trec în browser fără erori JS/CSP în mediul izolat.
 După mutații, redirect 303 previne repetarea POST-ului la refresh. Nu este o garanție
 de idempotency pentru retry de rețea; aceasta rămâne o extensie separată.
+
+## Etapa 3: operare și supply chain
+
+Setul de pachete efectiv instalat a fost scanat cu pip-audit. A fost identificat
+`GHSA-g6x2-hccm-hh4m` / `CVE-2026-102598` în Werkzeug 3.1.8. Advisory-ul privește
+Windows/NTFS, deci nu demonstrează un exploit pe acest VPS Linux. Versiunea 3.1.9
+este fixată și pregătită într-un venv separat. Sursa primară:
+https://github.com/pallets/werkzeug/security/advisories/GHSA-g6x2-hccm-hh4m
+
+Dependențele runtime și testele au versiuni fixate. Deploy-ul leagă codul, binarul
+și mediul Python într-un singur snapshot, verifică versiunile și testează chiar
+binarul pregătit pentru producție. Backup-ul coordonat prin flock este extras și
+verificat, inclusiv fiecare fișier BDB; o arhivă alterată este refuzată înainte de
+extragere. Scripturile trec shellcheck. Analytics injectat în paginile financiare
+este eliminat și CSP pentru scripturi permite numai originea proprie.
+
+Validare înainte de activare: 53 teste trecute în mediul Python nou; browser smoke
+reproductibil trecut în același mediu; setul runtime fixat are zero vulnerabilități
+cunoscute raportate de pip-audit la momentul verificării. Aceasta nu înlocuiește
+reviziile viitoare și nu certifică pachetele OS sau celelalte proiecte ale VPS-ului.

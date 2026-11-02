@@ -58,9 +58,9 @@ def security_headers(response):
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
         "Content-Security-Policy": "default-src 'self'; base-uri 'none'; "
             "object-src 'none'; frame-ancestors 'none'; form-action 'self'; "
-            "script-src 'self' https://analytics.micutu.com https://static.cloudflareinsights.com; "
+            "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; "
-            "connect-src 'self' https://analytics.micutu.com https://cloudflareinsights.com",
+            "connect-src 'self'",
         "X-Request-ID": getattr(g, "request_id", ""),
     })
     response.vary.add("Cookie")
@@ -71,7 +71,8 @@ def security_headers(response):
 def health():
     checks = {
         "binary": os.access(BIN_PATH, os.X_OK),
-        "data_dir": os.path.isdir(os.path.join(WORK_DIR, "data")),
+        "data_dir": os.path.isdir(os.path.join(WORK_DIR, "data")) and os.access(
+            os.path.join(WORK_DIR, "data"), os.R_OK | os.W_OK | os.X_OK),
         "configuration": configured(),
     }
     ok = all(checks.values())

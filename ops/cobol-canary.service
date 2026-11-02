@@ -1,0 +1,42 @@
+[Unit]
+Description=Ledger of Ages COBOL
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=micu
+Group=www-data
+WorkingDirectory=/srv/canary/cobol.micutu.com/app
+EnvironmentFile=/srv/canary/cobol.micutu.com/app/.env
+Environment=LEDGER_BIN=/srv/canary/cobol.micutu.com/current/ledger.cgi
+Environment=LEDGER_DIR=/srv/canary/cobol.micutu.com/app
+ExecStart=/srv/canary/cobol.micutu.com/current/runtime/bin/gunicorn --chdir /srv/canary/cobol.micutu.com/current --access-logfile - --error-logfile - --workers 1 --timeout 30 --bind 127.0.0.1:9001 app:app
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=yes
+ReadWritePaths=/srv/canary/cobol.micutu.com/app/data
+
+[Install]
+WantedBy=multi-user.target

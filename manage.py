@@ -21,7 +21,7 @@ def main():
     lines = path.read_text().splitlines() if path.exists() else ["LEDGER_USER=micu"]
     lines = [line for line in lines if not line.startswith((
         "LEDGER_PASS=", "LEDGER_PASS_HASH=", "LEDGER_PASSWORD_HASH="))]
-    lines.append("LEDGER_PASSWORD_HASH=" + generate_password_hash(password, method="scrypt:131072:8:1"))
+    lines.append("LEDGER_PASSWORD_HASH='" + generate_password_hash(password, method="scrypt:131072:8:1") + "'")
     if not any(line.startswith("LEDGER_CSRF_SECRET=") for line in lines):
         lines.append("LEDGER_CSRF_SECRET=" + secrets.token_hex(32))
     descriptor, name = tempfile.mkstemp(prefix=".env-", dir=path.parent)

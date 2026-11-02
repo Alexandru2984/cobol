@@ -1,0 +1,31 @@
+[Unit]
+Description=Consistent backup of COBOL Ledger ISAM state
+After=cobol-canary.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=LEDGER_APP_DIR=/srv/canary/cobol.micutu.com/app
+Environment=LEDGER_BACKUP_DIR=/srv/backups/cobol-ledger
+ExecStart=/usr/local/sbin/cobol-ledger-backup
+TimeoutStartSec=120
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/srv/backups/cobol-ledger /srv/canary/cobol.micutu.com/app/data

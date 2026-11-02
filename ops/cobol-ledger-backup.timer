@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily COBOL Ledger state backup
+
+[Timer]
+OnCalendar=*-*-* 03:05:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=cobol-ledger-backup.service
+
+[Install]
+WantedBy=timers.target
