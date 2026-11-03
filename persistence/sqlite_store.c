@@ -58,7 +58,8 @@ static int open_store(void) {
         if (chmod("data/ledger.sqlite3", 0600) || sqlite3_exec(db, schema, NULL, NULL, NULL) != SQLITE_OK)
             return SQLITE_ERROR;
     }
-    if (pragma_number("PRAGMA application_id") != APP_ID || pragma_number("PRAGMA user_version") != 1)
+    int version = pragma_number("PRAGMA user_version");
+    if (pragma_number("PRAGMA application_id") != APP_ID || version < 1 || version > 3)
         return SQLITE_NOTADB;
     return SQLITE_OK;
 }

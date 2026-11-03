@@ -5,6 +5,7 @@ import sqlite3
 import stat
 
 APPLICATION_ID = 1279543122
+SUPPORTED_VERSIONS = {1, 2, 3}  # additive account/goal migrations; compatible core columns
 CATEGORIES = {"Venituri", "Locuinta", "Mancare", "Hobby", "Utilitati"}
 
 
@@ -24,7 +25,7 @@ def connect(work_dir):
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA synchronous=FULL")
         if connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID or (
-                connection.execute("PRAGMA user_version").fetchone()[0] != 1):
+                connection.execute("PRAGMA user_version").fetchone()[0] not in SUPPORTED_VERSIONS):
             raise sqlite3.DatabaseError("Unsupported ledger schema")
         yield connection
     finally:

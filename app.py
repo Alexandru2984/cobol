@@ -18,7 +18,7 @@ from werkzeug.security import check_password_hash
 from security import (FORM_LIMITS, QUERY_LIMITS, SESSION_COOKIE, client_ip,
                       csrf_token, ledger_lock, parse_fields, session_token,
                       verify_csrf)
-from store import APPLICATION_ID
+from store import APPLICATION_ID, SUPPORTED_VERSIONS
 
 BASE_DIR = Path(__file__).resolve().parent
 BIN_PATH = os.environ.get("LEDGER_BIN", str(BASE_DIR / "ledger.cgi"))
@@ -113,7 +113,7 @@ def health():
         try:
             with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
                 store_ok = (db.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-                            and db.execute("PRAGMA user_version").fetchone()[0] == 1)
+                            and db.execute("PRAGMA user_version").fetchone()[0] in SUPPORTED_VERSIONS)
                 db.execute("SELECT id,day,category,description,amount_cents FROM ledger LIMIT 0")
         except (OSError, sqlite3.Error):
             store_ok = False
