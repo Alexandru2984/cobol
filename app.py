@@ -18,7 +18,7 @@ from werkzeug.security import check_password_hash
 from security import (FORM_LIMITS, QUERY_LIMITS, SESSION_COOKIE, client_ip,
                       csrf_token, ledger_lock, parse_fields, session_token,
                       verify_csrf)
-from store import APPLICATION_ID, SUPPORTED_VERSIONS
+from store import APPLICATION_ID, SUPPORTED_VERSIONS, connect
 
 BASE_DIR = Path(__file__).resolve().parent
 BIN_PATH = os.environ.get("LEDGER_BIN", str(BASE_DIR / "ledger.cgi"))
@@ -113,7 +113,7 @@ def health():
         try:
             with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
                 store_ok = (db.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-                            and db.execute("PRAGMA user_version").fetchone()[0] in SUPPORTED_VERSIONS)
+                            and db.execute("PRAGMA user_version").fetchone()[0] in {2, 3})
                 db.execute("SELECT id,day,category,description,amount_cents FROM ledger LIMIT 0")
         except (OSError, sqlite3.Error):
             store_ok = False
@@ -150,6 +150,8 @@ def index():
         if form["cmd"] in {"budget-save", "budget-del"} and "month" not in form:
             abort(400, "Luna este obligatorie.")
     env = native_environment(session, query)
+    if form.get("cmd") in {"add", "update"} and form.get("account"):
+        env["LEDGER_TARGET_ACCOUNT"] = form["account"]
     input_data = urlencode(form).encode("ascii") if request.method == "POST" else None
     env["CONTENT_LENGTH"] = str(len(input_data or b""))
     try:
@@ -174,19 +176,21 @@ def index():
                 process.communicate()  # reap the child and release its file descriptors
                 logger.error("backend_timeout request=%s", g.request_id)
                 abort(504, "Backend-ul nu a raspuns la timp.")
+            if process.returncode != 0 or len(stdout) > MAX_OUTPUT:
+                logger.error("backend_failed request=%s exit=%s", g.request_id, process.returncode)
+                abort(502, "Backend-ul a esuat.")
+            if stderr:
+                logger.warning("backend_stderr request=%s bytes=%s", g.request_id, len(stderr))
+            return cgi_response(stdout, env["LEDGER_CSRF_TOKEN"], form)
     except TimeoutError:
         response = Response("Registrul este ocupat. Reincearca.", status=503)
         response.headers["Retry-After"] = "2"
         return response
+    except sqlite3.Error:
+        abort(503, "Registrul nu este disponibil.")
     except OSError:
         logger.exception("backend_unavailable request=%s", g.request_id)
         abort(502, "Backend indisponibil.")
-    if process.returncode != 0 or len(stdout) > MAX_OUTPUT:
-        logger.error("backend_failed request=%s exit=%s", g.request_id, process.returncode)
-        abort(502, "Backend-ul a esuat.")
-    if stderr:
-        logger.warning("backend_stderr request=%s bytes=%s", g.request_id, len(stderr))
-    return cgi_response(stdout, env["LEDGER_CSRF_TOKEN"], form)
 
 
 def native_environment(session, query=None):
@@ -204,6 +208,7 @@ def native_environment(session, query=None):
         "LEDGER_CSRF_TOKEN": csrf_token(app.config["SECRET_KEY"], session),
         "LEDGER_AUTH_MODE": "legacy", "LEDGER_AUTH_VERIFIED": "N",
         "LEDGER_NOTICE": query.get("notice", ""),
+        "LEDGER_ACCOUNT_FILTER": query.get("account", "") if query.get("view", "LEDGER") in {"LEDGER", "REPORT"} else "",
         "LEDGER_RULE_KEY": secrets.token_hex(16),
         "LEDGER_LOCAL_TODAY": datetime.now(ZoneInfo(
             os.environ.get("LEDGER_TIMEZONE", "Europe/Bucharest"))).date().isoformat(),
@@ -272,11 +277,43 @@ def cgi_response(stdout, current_csrf, form):
         response.status_code = 303
         response.headers["Location"] = "/" + ("?" + urlencode(target) if target else "")
         response.set_data("")
+    if response.status_code == 200 and response.mimetype == "text/html":
+        response = account_fields(response, form)
+    return response
+
+
+def account_fields(response, form):
+    body = response.get_data(as_text=True)
+    if "<!--LEDGER_ACCOUNT_" not in body:
+        return response
+    from html import escape
+    with connect(WORK_DIR) as db:
+        db.row_factory = sqlite3.Row
+        choices = db.execute("SELECT id,name,active FROM accounts ORDER BY active DESC,id").fetchall()
+        selected = int(form.get("account") or request.args.get("account") or 1)
+        if request.args.get("edit"):
+            record = db.execute("SELECT account_id FROM ledger WHERE id=?", (int(request.args["edit"]),)).fetchone()
+            if record:
+                selected = record[0]
+        entry = render_template("_account_select.html", choices=choices, selected=selected, mode="entry")
+        filter_field = render_template("_account_select.html", choices=choices, selected=int(request.args.get("account") or 0), mode="filter")
+        body = body.replace("<!--LEDGER_ACCOUNT_SELECT-->", entry).replace("<!--LEDGER_ACCOUNT_FILTER-->", filter_field)
+        ids = {int(value) for value in re.findall(r"<!--LEDGER_ACCOUNT_LABEL:([0-9]{6})-->", body)}
+        labels = {}
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            labels = {row[0]: row[1] for row in db.execute("SELECT l.id,a.name FROM ledger l JOIN accounts a ON a.id=l.account_id WHERE l.id IN ("+placeholders+")", tuple(ids))}
+        body = re.sub(r"<!--LEDGER_ACCOUNT_LABEL:([0-9]{6})-->", lambda match: "<small class='transaction-account'>"+escape(labels.get(int(match[1]), ""))+"</small>", body)
+    response.set_data(body)
     return response
 
 
 from imports import create_import_blueprint
 app.register_blueprint(create_import_blueprint(native_authorize, configured, WORK_DIR))
+
+
+from finance import create_finance_blueprint
+app.register_blueprint(create_finance_blueprint(native_authorize, configured, WORK_DIR))
 
 
 if __name__ == "__main__":

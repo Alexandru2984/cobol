@@ -478,7 +478,7 @@ def test_descending_sort_and_page_clamp(client):
     add(client, headers, "2026-07-01", "Hobby", "older", "1")
     add(client, headers, "2026-07-03", "Hobby", "newer", "1")
     response = client.get("/?sort=DATE_DESC&page=50000", headers=headers)
-    assert response.data.index(b"newer</td>") < response.data.index(b"older</td>")
+    assert response.data.index(b">newer") < response.data.index(b">older")
     assert b"Total (2 tranzactii)" in response.data
 
 

@@ -14,10 +14,10 @@ from store import CATEGORIES
 
 SESSION_COOKIE = "__Host-ledger-session"
 FORM_LIMITS = {"cmd": 20, "user": 40, "pass": 40, "date": 10, "cat": 15,
-               "desc": 30, "amount": 20, "id": 6, "csrf_token": 300, "month": 7, "cycle": 7, "due": 10, "create_key": 32}
+               "desc": 30, "amount": 20, "id": 6, "csrf_token": 300, "month": 7, "cycle": 7, "due": 10, "create_key": 32, "account": 6}
 QUERY_LIMITS = {"filter": 15, "sort": 10, "from": 10, "to": 10,
                 "view": 10, "export": 3, "edit": 6, "q": 30, "page": 5, "notice": 8,
-                "kind": 7, "month": 7, "rule": 6}
+                "kind": 7, "month": 7, "rule": 6, "account": 6}
 
 
 def parse_fields(raw, limits):
@@ -39,9 +39,11 @@ def parse_fields(raw, limits):
         if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
             abort(400, "Caractere de control nepermise.")
         fields[key] = value
-    for key in ("id", "edit", "page", "rule"):
+    for key in ("id", "edit", "page", "rule", "account"):
         if fields.get(key) and not re.fullmatch(r"[0-9]+", fields[key]):
             abort(400, "ID sau pagina invalida.")
+    if fields.get("account") and int(fields["account"]) == 0:
+        abort(400, "Cont invalid.")
     if "month" in fields:
         try:
             if not re.fullmatch(r"[0-9]{4}-[0-9]{2}", fields["month"]):

@@ -3,31 +3,16 @@
 #define _POSIX_C_SOURCE 200809L
 #include <sqlite3.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "schema.h"
 
 static sqlite3 *db;
 static sqlite3_stmt *cursor;
 #define APP_ID 1279543122
-static const char *schema =
-    "BEGIN IMMEDIATE;"
-    "CREATE TABLE ledger("
-    "id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(id BETWEEN 1 AND 999999),"
-    "day TEXT NOT NULL CHECK(length(day)=10 AND day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND day>='0001-01-01' AND date(day,'+0 days') IS day),"
-    "category TEXT NOT NULL CHECK(category IN ('Venituri','Locuinta','Mancare','Hobby','Utilitati')),"
-    "description TEXT NOT NULL CHECK(length(trim(description))>0 AND length(CAST(description AS BLOB))<=30),"
-    "amount_cents INTEGER NOT NULL CHECK(typeof(amount_cents)='integer' AND amount_cents BETWEEN -999999999 AND 999999999));"
-    "CREATE INDEX ledger_day ON ledger(day,id);"
-    "CREATE INDEX ledger_match ON ledger(day,category,description,amount_cents);"
-    "CREATE TABLE import_batches("
-    "token TEXT PRIMARY KEY,owner TEXT NOT NULL,expires INTEGER NOT NULL,"
-    "source_json TEXT NOT NULL,options_json TEXT NOT NULL,"
-    "preview_json TEXT NOT NULL DEFAULT '[]',rows_json TEXT NOT NULL DEFAULT '[]',"
-    "state TEXT NOT NULL DEFAULT 'staged' CHECK(state IN ('staged','ready','done')),"
-    "added INTEGER NOT NULL DEFAULT 0,skipped INTEGER NOT NULL DEFAULT 0);"
-    "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
-    "PRAGMA application_id=1279543122; PRAGMA user_version=1; COMMIT;";
+
 
 static int pragma_number(const char *sql) {
     sqlite3_stmt *s = NULL;
@@ -55,7 +40,11 @@ static int open_store(void) {
     if (sqlite3_exec(db, "PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE;", NULL, NULL, NULL) != SQLITE_OK)
         return SQLITE_ERROR;
     if (!exists) {
-        if (chmod("data/ledger.sqlite3", 0600) || sqlite3_exec(db, schema, NULL, NULL, NULL) != SQLITE_OK)
+        if (chmod("data/ledger.sqlite3", 0600) || sqlite3_exec(db, ledger_schema_1, NULL, NULL, NULL) != SQLITE_OK)
+            return SQLITE_ERROR;
+        if (sqlite3_exec(db, "PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;", NULL, NULL, NULL) != SQLITE_OK
+            || sqlite3_exec(db, ledger_schema_2, NULL, NULL, NULL) != SQLITE_OK
+            || sqlite3_exec(db, "PRAGMA user_version=2; COMMIT; PRAGMA foreign_keys=ON;", NULL, NULL, NULL) != SQLITE_OK)
             return SQLITE_ERROR;
     }
     int version = pragma_number("PRAGMA user_version");
@@ -67,6 +56,17 @@ static int open_store(void) {
 static void bind_text(sqlite3_stmt *s, int n, const char *text, int length) {
     while (length && text[length-1] == ' ') --length;
     sqlite3_bind_text(s, n, text, length, SQLITE_TRANSIENT);
+}
+
+static int account_env(const char *name) {
+    const char *raw = getenv(name);
+    if (!raw || !*raw) return 0;
+    int value = 0, count = 0;
+    for (; *raw; raw++) {
+        if (*raw < '0' || *raw > '9' || ++count > 6) return -1;
+        value = value * 10 + *raw - '0';
+    }
+    return value;
 }
 
 static int copy_row(sqlite3_stmt *s, int32_t *id, char *day, char *cat, char *desc, int64_t *cents) {
@@ -93,7 +93,7 @@ static int copy_row(sqlite3_stmt *s, int32_t *id, char *day, char *cat, char *de
  * 6/7 id asc/desc, 8/9 date asc/desc, 10 date >= bound,
  * 11 next, 12 durable ID high-water mark. */
 int ledger_store(int32_t *op, int32_t *id, char *day, char *cat, char *desc,
-                 int64_t *cents, char *status) {
+                 int64_t *cents, char *status, int32_t *force_default) {
     int rc = SQLITE_OK;
     sqlite3_stmt *s = NULL;
     memcpy(status, "30", 2);
@@ -107,14 +107,17 @@ int ledger_store(int32_t *op, int32_t *id, char *day, char *cat, char *desc,
         return 0;
     } else if (*op >= 6 && *op <= 10) {
         const char *queries[] = {
-            "SELECT id,day,category,description,amount_cents FROM ledger ORDER BY id",
-            "SELECT id,day,category,description,amount_cents FROM ledger ORDER BY id DESC",
-            "SELECT id,day,category,description,amount_cents FROM ledger ORDER BY day,id",
-            "SELECT id,day,category,description,amount_cents FROM ledger ORDER BY day DESC,id DESC",
-            "SELECT id,day,category,description,amount_cents FROM ledger WHERE day>=? ORDER BY day,id"};
+            "SELECT id,day,category,description,amount_cents FROM ledger WHERE (?1=0 OR account_id=?1) ORDER BY id",
+            "SELECT id,day,category,description,amount_cents FROM ledger WHERE (?1=0 OR account_id=?1) ORDER BY id DESC",
+            "SELECT id,day,category,description,amount_cents FROM ledger WHERE (?1=0 OR account_id=?1) ORDER BY day,id",
+            "SELECT id,day,category,description,amount_cents FROM ledger WHERE (?1=0 OR account_id=?1) ORDER BY day DESC,id DESC",
+            "SELECT id,day,category,description,amount_cents FROM ledger WHERE (?1=0 OR account_id=?1) AND day>=?2 ORDER BY day,id"};
         sqlite3_finalize(cursor); cursor = NULL;
+        int filter = account_env("LEDGER_ACCOUNT_FILTER");
+        if (filter < 0) return 0;
         rc = sqlite3_prepare_v2(db, queries[*op-6], -1, &cursor, NULL);
-        if (rc == SQLITE_OK && *op == 10) bind_text(cursor, 1, day, 10);
+        if (rc == SQLITE_OK) sqlite3_bind_int(cursor, 1, filter);
+        if (rc == SQLITE_OK && *op == 10) bind_text(cursor, 2, day, 10);
     } else if (*op == 11) {
         rc = cursor ? sqlite3_step(cursor) : SQLITE_MISUSE;
         if (rc == SQLITE_DONE) { memcpy(status, "10", 2); return 0; }
@@ -126,15 +129,20 @@ int ledger_store(int32_t *op, int32_t *id, char *day, char *cat, char *desc,
     } else if (*op >= 2 && *op <= 5) {
         const char *queries[] = {
             "SELECT id,day,category,description,amount_cents FROM ledger WHERE id=?",
-            "INSERT INTO ledger(id,day,category,description,amount_cents) VALUES(?,?,?,?,?)",
-            "UPDATE ledger SET day=?2,category=?3,description=?4,amount_cents=?5 WHERE id=?1",
+            "INSERT INTO ledger(id,day,category,description,amount_cents,account_id) SELECT ?1,?2,?3,?4,?5,?6 WHERE EXISTS(SELECT 1 FROM accounts WHERE id=?6 AND active=1)",
+            "UPDATE ledger SET day=?2,category=?3,description=?4,amount_cents=?5,account_id=CASE WHEN ?6=0 THEN account_id ELSE ?6 END WHERE id=?1 AND (?6=0 OR ?6=account_id OR EXISTS(SELECT 1 FROM accounts WHERE id=?6 AND active=1))",
             "DELETE FROM ledger WHERE id=?"};
         rc = sqlite3_prepare_v2(db, queries[*op-2], -1, &s, NULL);
         if (rc == SQLITE_OK) {
             sqlite3_bind_int(s, 1, *id);
             if (*op == 3 || *op == 4) {
+                int account = account_env("LEDGER_TARGET_ACCOUNT");
+                if (*force_default) account = 1;
+                if (account < 0) { sqlite3_finalize(s); return 0; }
+                if (*op == 3 && account == 0) account = 1;
                 bind_text(s, 2, day, 10); bind_text(s, 3, cat, 15); bind_text(s, 4, desc, 30);
                 sqlite3_bind_int64(s, 5, *cents);
+                sqlite3_bind_int(s, 6, account);
             }
             rc = sqlite3_step(s);
             if (*op == 2) {

@@ -1,0 +1,7 @@
+<label for="{{ 'entry-account' if mode == 'entry' else 'filter-account' }}">Cont
+<select id="{{ 'entry-account' if mode == 'entry' else 'filter-account' }}" name="account">
+{% if mode == 'filter' %}<option value="">Toate conturile</option>{% endif %}
+{% for choice in choices %}{% if choice.active or mode == 'filter' or choice.id == selected %}
+<option value="{{ choice.id }}"{% if choice.id == selected %} selected{% endif %}>{{ choice.name }}{{ ' (arhivat)' if not choice.active else '' }}</option>
+{% endif %}{% endfor %}
+</select></label>

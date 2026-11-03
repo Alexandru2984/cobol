@@ -12,21 +12,7 @@
 </head>
 <body>
 <a class="skip" href="#main">Sari la continut</a>
-<aside class="sidebar">
-  <a class="brand" href="/"><span class="brand-mark">L<span>·</span></span><span>Ledger<span class="brand-small">OF AGES</span></span></a>
-  <p class="sidebar-label">SPATIUL TAU FINANCIAR</p>
-  <nav aria-label="Navigare principala">
-    <a href="/"><span aria-hidden="true">▦</span> Tranzactii</a>
-    <a href="/?view=REPORT"><span aria-hidden="true">↗</span> Raport lunar</a>
-    <a href="/?view=BUDGET"><span aria-hidden="true">◉</span> Bugete</a>
-    <a href="/?view=RECURRING"><span aria-hidden="true">⇄</span> Recurente</a>
-    <a href="/import" aria-current="page"><span aria-hidden="true">↓</span> Import CSV</a>
-    <a href="/?view=AUDIT"><span aria-hidden="true">◎</span> Activitate</a>
-  </nav>
-  <div class="sidebar-note"><span class="status-dot"></span>Un singur registru.<br><b>Mai putina munca manuala.</b></div>
-  <div class="account"><div><b>Registru personal</b><small>Import privat</small></div><button type="button" class="theme-toggle" data-theme-toggle aria-label="Schimba tema" title="Schimba tema">◐</button></div>
-  <form method="post" action="/" class="logout-form"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="cmd" value="logout"><button class="logout" type="submit">Iesi din cont</button></form>
-</aside>
+{% set active = 'import' %}{% include '_private_sidebar.html' %}
 <main id="main" class="workspace import-workspace">
   <header class="page-heading"><div><p class="eyebrow">FINANTE PERSONALE / IMPORT CSV</p><h1>Din fisier,<br>direct in registru.</h1><p>Verifica fiecare rand inainte de a adauga tranzactiile.</p></div><a class="btn secondary" href="/">Inapoi la registru</a></header>
   <ol class="import-steps" aria-label="Etapele importului">
@@ -65,6 +51,7 @@
         <label for="map-{{ key }}">{{ label }}<select id="map-{{ key }}" name="{{ key }}" required><option value="">Alege coloana</option>{% if key == 'category' %}<option value="-1"{% if mapping[key] == -1 %} selected{% endif %}>Foloseste categoria implicita</option>{% endif %}{% for header in table[0] %}<option value="{{ loop.index0 }}"{% if mapping[key] == loop.index0 %} selected{% endif %}>{{ loop.index }}. {{ header }}</option>{% endfor %}</select></label>
         {% endfor %}
         <label for="default-category">Categorie implicita<select id="default-category" name="default_category">{% for category in categories %}<option{% if options.get('category', 'Hobby') == category %} selected{% endif %}>{{ category }}</option>{% endfor %}</select></label>
+        <label for="import-account">Cont destinatie<select id="import-account" name="account">{% for choice in account_choices %}<option value="{{ choice.id }}"{% if choice.id == options.get('account_id', 1) %} selected{% endif %}>{{ choice.name }}</option>{% endfor %}</select></label>
         <label for="duplicates">Randuri identice<select id="duplicates" name="duplicates"><option value="skip">Omite duplicatele</option><option value="include"{% if options.get('duplicates') == 'include' %} selected{% endif %}>Importa inclusiv duplicatele</option></select></label>
       </div>
       <label class="import-checkbox"><input type="checkbox" name="ledger_export" value="yes"{% if options.get('ledger_export') %} checked{% endif %}>Fisier exportat din Ledger of Ages; elimina apostroful de protectie Excel din descrieri.</label>

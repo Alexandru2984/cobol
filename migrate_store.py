@@ -67,7 +67,7 @@ def migrate(work, binary):
             native(binary, stage, "init")
             with connect(stage) as db:
                 db.execute("BEGIN IMMEDIATE")
-                db.executemany("INSERT INTO ledger VALUES(?,?,?,?,?)", rows)
+                db.executemany("INSERT INTO ledger(id,day,category,description,amount_cents) VALUES(?,?,?,?,?)", rows)
                 db.execute("INSERT INTO metadata VALUES('migration_rows_sha256',?)", (digest(rows),))
                 db.commit()
                 copied = db.execute("SELECT id,day,category,description,amount_cents FROM ledger ORDER BY id").fetchall()

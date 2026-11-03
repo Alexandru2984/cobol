@@ -86,13 +86,13 @@ def normalized(row, mapping, options):
     return [day, category, description, cents]
 
 
-def preview(db, rows, include_duplicates=False):
+def preview(db, rows, include_duplicates=False, account_id=1):
     seen = set()
     result = []
     for row in rows:
         key = tuple(row)
         duplicate = key in seen or db.execute(
-            "SELECT 1 FROM ledger WHERE day=? AND category=? AND description=? AND amount_cents=? LIMIT 1", row).fetchone() is not None
+            "SELECT 1 FROM ledger WHERE day=? AND category=? AND description=? AND amount_cents=? AND account_id=? LIMIT 1", (*row, account_id)).fetchone() is not None
         seen.add(key)
         result.append({"row": row, "duplicate": duplicate,
                        "skip": duplicate and not include_duplicates, "error": ""})
@@ -171,7 +171,10 @@ def create_import_blueprint(authorize, configured, work_dir):
                     "description": {"descriere", "description", "desc", "detalii"}, "amount": {"suma", "amount", "value", "valoare"}}
         defaults = {key: next((i for i, header in enumerate(table[0]) if header.lower() in names), -1 if key == "category" else "") for key, names in synonyms.items()}
         defaults.update(options.get("mapping", {}))
-        return page(session, "mapping", token=batch["token"], table=table, options=options, mapping=defaults, error=error)
+        with connect(work_dir) as choices_db:
+            account_choices = choices_db.execute("SELECT id,name FROM accounts WHERE active=1 ORDER BY id").fetchall()
+        account_choices = [{"id": row[0], "name": row[1]} for row in account_choices]
+        return page(session, "mapping", token=batch["token"], table=table, options=options, mapping=defaults, error=error, account_choices=account_choices)
 
     def preview_page(session, batch, message=""):
         result = json.loads(batch["preview_json"])
@@ -218,7 +221,7 @@ def create_import_blueprint(authorize, configured, work_dir):
 
     @bp.post("/import/<token>/preview")
     def prepare(token):
-        fields = ("day", "category", "description", "amount", "default_category", "duplicates", "ledger_export")
+        fields = ("day", "category", "description", "amount", "default_category", "duplicates", "ledger_export", "account")
         with access(fields=fields) as (session, _), connect(work_dir) as db:
             batch = load_batch(db, token, session)
             if batch["state"] == "done":
@@ -239,6 +242,12 @@ def create_import_blueprint(authorize, configured, work_dir):
                            duplicates=request.form.get("duplicates", "skip"), ledger_export=request.form.get("ledger_export") == "yes")
             if options["category"] not in CATEGORIES or options["duplicates"] not in {"skip", "include"} or request.form.get("ledger_export", "no") not in {"no", "yes"}:
                 abort(400)
+            account_raw = request.form.get("account", "1")
+            if not re.fullmatch(r"[0-9]{1,6}", account_raw):
+                abort(400)
+            options["account_id"] = int(account_raw)
+            if not db.execute("SELECT 1 FROM accounts WHERE id=? AND active=1", (options["account_id"],)).fetchone():
+                return mapped_page(session, batch, "Alege un cont activ pentru import."), 409
             result, valid_rows = [], []
             for number, raw in enumerate(table[1:], start=2):
                 try:
@@ -247,7 +256,7 @@ def create_import_blueprint(authorize, configured, work_dir):
                     result.append({"row": row, "error": "", "line": number})
                 except ValueError as exc:
                     result.append({"row": [raw[selected["day"]], "", raw[selected["description"]], 0], "error": str(exc), "line": number, "skip": False, "duplicate": False})
-            decisions = iter(preview(db, valid_rows, options["duplicates"] == "include"))
+            decisions = iter(preview(db, valid_rows, options["duplicates"] == "include", options["account_id"]))
             for item in result:
                 if not item["error"]:
                     item.update(next(decisions))
@@ -277,7 +286,10 @@ def create_import_blueprint(authorize, configured, work_dir):
                 abort(409, "Corecteaza erorile si verifica previzualizarea.")
             options = json.loads(batch["options_json"])
             rows = json.loads(batch["rows_json"])
-            current = preview(db, rows, options["duplicates"] == "include")
+            account_id = options.get("account_id", 1)
+            if not db.execute("SELECT 1 FROM accounts WHERE id=? AND active=1", (account_id,)).fetchone():
+                abort(409, "Contul importului este arhivat. Alege un cont activ la mapare.")
+            current = preview(db, rows, options["duplicates"] == "include", account_id)
             old = json.loads(batch["preview_json"])
             if [r["skip"] for r in current] != [r["skip"] for r in old]:
                 for fresh, previous in zip(current, old):
@@ -291,7 +303,7 @@ def create_import_blueprint(authorize, configured, work_dir):
             if last + len(accepted) > 999999:
                 abort(409, "Importul depaseste limita de ID-uri a registrului.")
             for offset, row in enumerate(accepted, start=1):
-                db.execute("INSERT INTO ledger(id,day,category,description,amount_cents) VALUES(?,?,?,?,?)", (last+offset, *row))
+                db.execute("INSERT INTO ledger(id,day,category,description,amount_cents,account_id) VALUES(?,?,?,?,?,?)", (last+offset, *row, account_id))
             skipped = len(current) - len(accepted)
             db.execute("UPDATE import_batches SET state='done',added=?,skipped=?,expires=?,source_json='[]',rows_json='[]',preview_json='[]',options_json='{}' WHERE token=?",
                        (len(accepted), skipped, int(time.time())+RECEIPT_TTL, token))

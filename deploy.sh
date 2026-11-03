@@ -78,6 +78,7 @@ if (( first_sql )); then
 fi
 sudo -n /usr/local/sbin/cobol-ledger-backup
 "$PYTHON" "$release/migrate_store.py" --work-dir "$APP_DIR" --binary "$release/ledger.cgi"
+"$PYTHON" "$release/upgrade_store.py" --work-dir "$APP_DIR"
 ln -s -- "$release" "$RELEASES_DIR/.current-next"
 mv -Tf -- "$RELEASES_DIR/.current-next" "$CURRENT"
 activated=1

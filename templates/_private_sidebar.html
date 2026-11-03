@@ -1,0 +1,12 @@
+<aside class="sidebar">
+  <a class="brand" href="/"><span class="brand-mark">L<span>·</span></span><span>Ledger<span class="brand-small">OF AGES</span></span></a>
+  <p class="sidebar-label">SPATIUL TAU FINANCIAR</p>
+  <nav aria-label="Navigare principala">
+    {% for key, path, icon, label in [('ledger','/','▦','Tranzactii'),('report','/?view=REPORT','↗','Raport lunar'),('budget','/?view=BUDGET','◉','Bugete'),('recurring','/?view=RECURRING','⇄','Recurente'),('accounts','/accounts','▣','Conturi'),('import','/import','↓','Import CSV'),('audit','/?view=AUDIT','◎','Activitate')] %}
+    <a href="{{ path }}"{% if active == key %} aria-current="page"{% endif %}><span aria-hidden="true">{{ icon }}</span> {{ label }}</a>
+    {% endfor %}
+  </nav>
+  <div class="sidebar-note"><span class="status-dot"></span>Un singur registru.<br><b>Mai multa claritate.</b></div>
+  <div class="account"><div><b>Registru personal</b><small>Spatiu privat</small></div><button type="button" class="theme-toggle" data-theme-toggle aria-label="Schimba tema" title="Schimba tema">◐</button></div>
+  <form method="post" action="/" class="logout-form"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="cmd" value="logout"><button class="logout" type="submit">Iesi din cont</button></form>
+</aside>

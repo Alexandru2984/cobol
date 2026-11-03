@@ -242,6 +242,7 @@ COPY "cobol/recurring-ws.cpy".
 01  W-ENC-HI                PIC 9(3).
 01  W-ENC-LO                PIC 9(3).
 01  W-QS                    PIC X(500).
+01  W-ACCOUNT-QUERY         PIC X(6).
 
 *> Edit mode
 01  W-EDIT-ID-RAW           PIC X(10).
@@ -1495,6 +1496,7 @@ PERFORM BUILD-NAV-QS.
             "<span aria-hidden='true'>&#9673;</span> Bugete</a>"
             "<a data-nav='RECURRING' href='?view=RECURRING'>"
             "<span aria-hidden='true'>&#8635;</span> Recurente</a>"
+            "<a href='/accounts'><span aria-hidden='true'>&#9633;</span> Conturi</a>"
             "<a href='/import'><span aria-hidden='true'>&#8595;</span> Import CSV</a>"
             "<a data-nav='AUDIT' href='?view=AUDIT'>"
             "<span aria-hidden='true'>&#9678;</span> Activitate</a></nav>"
@@ -1721,6 +1723,7 @@ DISPLAY "<section class='card filters' aria-labelledby='filter-title'>"
             "<label for='filter-to'>Pana la"
             "<input id='filter-to' type='date' name='to' value='"
             FUNCTION TRIM(W-TO-DATE) "'></label>"
+            "<!--LEDGER_ACCOUNT_FILTER-->"
             "<div class='filter-actions'><button type='submit' class='btn'>"
             "Aplica filtrele</button><button type='submit' class='btn secondary' "
             "name='export' value='csv'>Export CSV &#8595;</button></div>"
@@ -1781,6 +1784,7 @@ DISPLAY-ENTRY-FIELDS.
         PERFORM HTML-ESCAPE
         DISPLAY FUNCTION TRIM(W-ESC-OUT) "'></label>"
     END-IF.
+    DISPLAY "<!--LEDGER_ACCOUNT_SELECT-->".
     DISPLAY "<div class='entry-actions'><button type='submit' class='btn'>".
     IF W-EDIT-MODE = "Y"
         DISPLAY "Actualizeaza</button><a href='?' class='btn secondary'>Anuleaza</a>"
@@ -1886,6 +1890,7 @@ DISPLAY-PAGINATION.
 BUILD-NAV-QS.
 *>  Query string cu filtrele curente pentru linkurile de paginare.
 *>  Valorile libere (filter, sort, q) sunt percent-encodate.
+    ACCEPT W-ACCOUNT-QUERY FROM ENVIRONMENT "LEDGER_ACCOUNT_FILTER".
     MOVE SPACES TO W-QS.
     MOVE W-FILTER-CAT TO W-ENC-IN.
     PERFORM URL-ENCODE.
@@ -1899,6 +1904,10 @@ BUILD-NAV-QS.
            "&from=" FUNCTION TRIM(W-FROM-DATE)
            "&to=" FUNCTION TRIM(W-TO-DATE)
         DELIMITED BY SIZE INTO W-QS.
+    IF W-ACCOUNT-QUERY NOT = SPACES AND LOW-VALUES
+        STRING FUNCTION TRIM(W-QS) "&account=" FUNCTION TRIM(W-ACCOUNT-QUERY)
+            DELIMITED BY SIZE INTO W-QS
+    END-IF.
     IF W-Q-LEN > 0
         MOVE W-SEARCH-Q TO W-ENC-IN
         PERFORM URL-ENCODE
@@ -1983,7 +1992,8 @@ DISPLAY "<tr data-transaction='" TRANS-ID "'>"
     MOVE TRANS-DESC TO W-ESC-IN.
     PERFORM HTML-ESCAPE.
     DISPLAY "<td data-label='Descriere' class='row-description'>"
-            FUNCTION TRIM(W-ESC-OUT) "</td>".
+            FUNCTION TRIM(W-ESC-OUT)
+            "<!--LEDGER_ACCOUNT_LABEL:" TRANS-ID "-->" "</td>".
     MOVE TRANS-AMOUNT TO W-DISPLAY-AMOUNT.
     IF TRANS-AMOUNT < 0
         DISPLAY "<td data-label='Suma' class='neg amount'>"
