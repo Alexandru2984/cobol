@@ -88,6 +88,9 @@ def test_manual_transactions_edit_filters_and_import_use_selected_account(client
     assert b"Venit card" in response.data and b"transaction-account" in response.data
     assert b"Venit card" not in client.get("/?account=1", headers=headers).data
     assert b"Venit card" in client.get("/?account=2&sort=DATE_DESC", headers=headers).data
+    filtered = client.get("/?account=2", headers=headers).data
+    assert b"?filter=Hobby&amp;account=2" in filtered
+    assert re.search(rb"href='\?[^']*account=2[^']*edit=000001", filtered)
     assert b"Venit card" not in client.get("/?account=1&export=csv", headers=headers).data
     assert b"Venit card" in client.get("/?account=2&view=REPORT", headers=headers).data or b"12.34" in client.get("/?account=2&view=REPORT", headers=headers).data
     response = client.get("/?edit=000001", headers=headers)

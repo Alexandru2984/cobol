@@ -1981,6 +1981,7 @@ CHECK-ROW-MATCH.
     END-IF.
 
 RENDER-ROW.
+    PERFORM BUILD-NAV-QS.
 DISPLAY "<tr data-transaction='" TRANS-ID "'>"
             "<td data-label='ID' class='row-id'>#" TRANS-ID "</td>".
     MOVE TRANS-DATE TO W-ESC-IN.
@@ -2004,8 +2005,8 @@ DISPLAY "<tr data-transaction='" TRANS-ID "'>"
                 "+" FUNCTION TRIM(W-DISPLAY-AMOUNT) "</td>"
     END-IF.
     DISPLAY "<td class='row-actions'><a class='btn btn-edit' "
-            "aria-label='Editeaza tranzactia " TRANS-ID "' href='?edit="
-            TRANS-ID "#transaction-form'>Editeaza</a>"
+            "aria-label='Editeaza tranzactia " TRANS-ID "' href='?"
+            FUNCTION TRIM(W-QS) "&amp;edit=" TRANS-ID "#transaction-form'>Editeaza</a>"
             "<form method='POST' data-delete>"
             "<input type='hidden' name='csrf_token' value='"
             FUNCTION TRIM(W-CSRF-TOKEN) "'>"
@@ -2022,13 +2023,17 @@ UPDATE-CAT-TOTAL.
     END-SEARCH.
 
 DISPLAY-SUMMARY.
-DISPLAY "<section class='category-summary' aria-label='Solduri pe categorii'>".
+    PERFORM BUILD-NAV-QS.
+    DISPLAY "<section class='category-summary' aria-label='Solduri pe categorii'>".
     PERFORM VARYING CAT-IDX FROM 1 BY 1 UNTIL CAT-IDX > 5
         MOVE CAT-TOTAL(CAT-IDX) TO W-DISPLAY-TOTAL
         DISPLAY "<a class='category-card' href='?filter="
-                FUNCTION TRIM(CAT-NAME(CAT-IDX)) "'><span>"
-                FUNCTION TRIM(CAT-NAME(CAT-IDX)) "</span><strong>"
-                FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong></a>"
+            FUNCTION TRIM(CAT-NAME(CAT-IDX)) WITH NO ADVANCING
+        IF W-ACCOUNT-QUERY NOT = SPACES AND LOW-VALUES
+            DISPLAY "&amp;account=" FUNCTION TRIM(W-ACCOUNT-QUERY) WITH NO ADVANCING
+        END-IF
+        DISPLAY "'><span>" FUNCTION TRIM(CAT-NAME(CAT-IDX))
+            "</span><strong>" FUNCTION TRIM(W-DISPLAY-TOTAL) "</strong></a>"
     END-PERFORM.
     DISPLAY "</section>".
 
