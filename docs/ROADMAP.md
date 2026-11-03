@@ -89,6 +89,27 @@ Previzualizare cu carduri pe mobil, temă luminoasă/întunecată și rezultate 
 importurilor din sesiunea curentă. Teste de întrerupere de proces înainte/după COMMIT,
 cereri paralele, rollback, sesiuni, CSRF și verificări reale în Chromium/Axe.
 
-Urmează: conturi numerar/card și transferuri care nu umflă veniturile sau cheltuielile;
-apoi obiective de economisire cu progres și contribuții. Fiecare are migrare versionată,
-validarea soldurilor și commit separat. CI și SEO continuă să acopere funcțiile livrate.
+## Etapa 7 livrată: conturi și transferuri
+
+Conturi numerar/card/bancă, sold inițial separat de venituri, filtre și editare de
+tranzacții pe cont, import în cont ales, transferuri atomice și istoric de anulare.
+Recipise semnate și audit în aceeași tranzacție, teste pentru replay/concurență și
+recuperare recurentă fără contaminarea contului. Schema aditivă 2 cu FK-uri și verificări.
+
+## Etapa 8 livrată: obiective și alocări
+
+Ținte, termen opțional, progres, sugestie lunară și istoric append-only. Alocările
+rezervă fonduri existente și sunt luate în calcul la disponibilul pentru transfer.
+Finalizarea eliberează rezervarea, fără a fabrica o cheltuială. Schema 3, validarea
+alocărilor concurente și avertizare când cheltuielile reduc acoperirea unui plan.
+
+## Etapa 9 livrată: ghid public și extinderea CI/SEO
+
+`/guide` cu exemple sintetice, metadata partajată, canonical, Open Graph și sitemap
+actualizat; numere de funcții corectate și legături de navigare. Teste pentru izolarea
+datelor private, SEO, migrare și toate fluxurile noi pe mobil/desktop. Dependabot
+configurat pentru actualizări propuse, fără merge automat.
+
+Urmează prioritar: reconciliere sold, categorii/etichete editabile, istoric pentru
+tranzacții șterse; apoi identitate Unix dedicată, backup offsite și alertare externă.
+Publicarea în GitHub și observarea indexării nu sunt echivalente cu verificarea locală.

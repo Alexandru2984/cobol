@@ -60,7 +60,7 @@ def security_headers(response):
         "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
         "Referrer-Policy": "same-origin", "X-Robots-Tag": (
             "index, follow" if response.status_code == 200 and (
-                request.endpoint == "about" or request.path == "/static/public-card.png")
+                request.endpoint in {"about", "guide"} or request.path == "/static/public-card.png")
             else "noindex, nofollow"),
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
         "Content-Security-Policy": "default-src 'self'; base-uri 'none'; "
@@ -89,6 +89,16 @@ def about_redirect():
     return redirect("/about", code=308)
 
 
+@app.get("/guide")
+def guide():
+    return render_template("guide.html", public_base=public_base())
+
+
+@app.get("/guide/")
+def guide_redirect():
+    return redirect("/guide", code=308)
+
+
 @app.get("/robots.txt")
 def robots():
     return Response("User-agent: *\nAllow: /\nDisallow: /health\nDisallow: /data/\n"
@@ -99,8 +109,9 @@ def robots():
 @app.get("/sitemap.xml")
 def sitemap():
     root = Element("urlset", xmlns="http://www.sitemaps.org/schemas/sitemap/0.9")
-    url = SubElement(root, "url")
-    SubElement(url, "loc").text = public_base() + "/about"
+    for path in ("/about", "/guide"):
+        url = SubElement(root, "url")
+        SubElement(url, "loc").text = public_base() + path
     return Response(tostring(root, encoding="utf-8", xml_declaration=True),
                     content_type="application/xml; charset=utf-8")
 

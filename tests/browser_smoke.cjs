@@ -37,6 +37,15 @@ const output = process.env.LEDGER_SCREENSHOT_DIR || '/tmp';
  }
  await page.getByText('Pot să îmi creez un cont aici?',{exact:true}).click();
  assert.equal(await page.locator('details[open]').count(),1);
+ await page.goto(base + '/guide');
+ assert.equal(await page.locator('h1').count(),1);
+ assert.match(await page.title(),/Ghid:/);
+ await checkAccessibility('guide-desktop');
+ for(const width of [320,390,768,1440]) {
+  await page.setViewportSize({width,height:900});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`guide overflow ${width}`);
+  if(width===390){await checkAccessibility('guide-mobile');await page.screenshot({path:path.join(output,'ledger-guide-mobile.png'),fullPage:true});}
+ }
  await page.goto(base + '/');
  await checkAccessibility('login');
  await page.screenshot({path:path.join(output, 'ledger-login-desktop.png'),fullPage:true});

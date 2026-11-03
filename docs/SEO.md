@@ -1,32 +1,24 @@
-# Descoperire publică și limitele indexării
+# Descoperire publică și confidențialitate
 
-`/about` este pagina publică de prezentare, cu informații despre funcțiile efectiv
-livrate și exemple demonstrative. Nu interoghează binarul COBOL sau baza de date și
-rămâne identică inclusiv când vizitatorul este autentificat.
+`/about` prezintă produsul, iar `/guide` explică tranzacțiile, conturile, transferurile,
+obiectivele, CSV-ul și planificarea, numai cu exemple demonstrative. Ambele rămân
+independente de autentificare și baza financiară. Titlurile, descrierile și H1 sunt
+distincte; canonical și OG folosesc originea configurată, nu Host sau parametri UTM.
+Fragmentele de metadata sunt partajate pentru a evita diferențe între pagini.
 
-Are titlu și descriere proprii, canonical fără query string, Open Graph, Twitter
-Card și imagine PNG 1200×630. Marcajul SoftwareApplication descrie aplicația, fără
-ratinguri, recenzii sau oferte inventate. Nu promitem eligibilitate pentru rich results.
+Sitemap-ul listează exclusiv aceste două pagini. Redirecturile finale cu slash sunt
+308 spre varianta canonical. OG/Twitter folosesc imaginea existentă 1200×630, iar
+microdata descrie aplicația fără ratinguri, recenzii sau prețuri inventate.
 
-Sitemap-ul conține numai URL-ul public canonical. `robots.txt` permite citirea paginilor
-pentru ca motoarele să poată observa directivele noindex ale registrului și exclude
-rutele de sănătate/date. Vhost-ul folosește robots.txt din aplicație, separat de cel
-comun celorlalte domenii de pe VPS.
+Paginile private, exporturile și erorile păstrează `X-Robots-Tag: noindex, nofollow`
+și no-store. Conturile, obiectivele și tranzacțiile nu ajung în metadata sau sitemap.
+Robots.txt nu înlocuiește autentificarea și nu este tratat ca mecanism de securitate.
+Nu blocăm citirea paginilor care trebuie să poată prezenta instrucțiunea noindex;
+vezi [documentația Google](https://developers.google.com/search/docs/crawling-indexing/block-indexing).
 
-Doar pagina publică și imaginea sa de distribuire primesc `X-Robots-Tag: index, follow`.
-Login-ul, paginile financiare, health și erorile rămân noindex. Autentificarea protejează
-datele; noindex controlează doar descoperirea în motoarele care respectă această directivă.
-Headerele no-store/no-transform și politica CSP rămân active pe domeniu.
-
-Imaginea socială se regenerează din `tools/social-card.html` cu
-`node tools/render_social_card.cjs` după instalarea tooling-ului din `tools/browser`.
-Nu folosește capturi sau valori din registrul real.
-
-Teste: metadate și canonical, redirect, sitemap/robots, dimensiunile imaginii, separarea
-datelor private, neexecutarea backend-ului pe pagina publică, viewport 320–1440 și Axe.
-Indexarea și poziția în căutări nu au fost măsurate. Search Console și trimiterea
-sitemap-ului nu au fost configurate în această etapă.
-
-Surse primare:
-- https://developers.google.com/search/docs/crawling-indexing/block-indexing
-- https://developers.google.com/search/docs/appearance/structured-data/software-app
+Testele verifică aceste reguli și legăturile interne; browserul verifică ghidul pe
+mobil și accesibilitatea automată. Implementarea urmează principiile de conținut
+util din [ghidul Google](https://developers.google.com/search/docs/fundamentals/seo-starter-guide).
+Search Console nu a fost conectat și nu s-au trimis verificări DNS, cereri de indexare
+sau date private către servicii SEO. Indexarea și pozițiile nu sunt garantate de
+metadata; ele se observă ulterior prin instrumentele proprietarului domeniului.

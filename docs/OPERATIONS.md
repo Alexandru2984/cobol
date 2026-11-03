@@ -7,6 +7,9 @@
 - Date: `app/data/ledger.sqlite3` pentru tranzacții; originalele ISAM sunt păstrate numai pentru arhivă, mod 0400.
 - Bugete: `data/budgets.dat`, cheie lună + categorie, creat la prima salvare.
   Backup-ul verifică toate fișierele `*.dat*`, inclusiv fișierele noi.
+- Conturi, transferuri, obiective, alocări și recipise: în același SQLite, schema 3.
+  `upgrade_store.py` aplică migrările aditive sub lock după backup și înainte de activare.
+  Rollback-ul acestei etape cere release-ul de compatibilitate `c2055db` sau mai nou.
 - Python: `../current/runtime` pointează spre mediul versionat al release-ului; serviciu: `cobol-canary.service`, loopback port 9001.
 - Traseu verificat: Cloudflare → vhost nginx → gunicorn → binar COBOL → SQLite / ISAM.
   Mai există nginx-uri pentru alte aplicații; nu sunt un al doilea backend al acestui proiect.

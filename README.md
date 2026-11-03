@@ -4,9 +4,10 @@ Personal finance in COBOL: a SQLite transaction ledger with a responsive web int
 filtered reports and CSV export.
 Public presentation: [cobol.micutu.com/about](https://cobol.micutu.com/about). Live at [cobol.micutu.com](https://cobol.micutu.com).
 
-The transaction engine, validation, sessions, audit and reports run in GnuCOBOL.
+The core transaction engine, validation, sessions, audit and reports run in GnuCOBOL.
 Native transaction persistence uses a small C/SQLite adapter with integer cents;
 budgets, sessions and recurring journals retain their indexed COBOL files.
+Accounts, transfers and savings allocations use authenticated Flask views and atomic SQLite transactions.
 Flask provides the HTTP/CGI security boundary; scrypt verification uses Werkzeug.
 No database service, CDN fonts or JavaScript framework is required.
 
@@ -14,6 +15,8 @@ No database service, CDN fonts or JavaScript framework is required.
 
 - Add, edit and delete transactions with confirmation and redirect after saving.
 - CSV import with column mapping, previews, row validation, duplicate decisions and atomic, idempotent confirmation.
+- Cash/card/bank accounts, opening balances, per-account filters and internal transfers with reversal history.
+- Savings goals, deadlines, protected allocations, progress and completion without fictitious income or spending.
 - Income, expenses, net balance, savings rate and category summaries.
 - Weekly/monthly/yearly recurring plans, previews, pause/resume and occurrence deduplication.
 - Monthly expense budgets with category limits, progress, alerts and month navigation.
@@ -53,7 +56,7 @@ The repository is in `app/`; the active snapshot is `../current`, and persistent
 stays in `app/data/`. Cloudflare and nginx proxy to loopback gunicorn. `./deploy.sh`
 compiles, tests, backs up, switches releases and verifies readiness, with rollback.
 
-Read [operations and incident response](docs/OPERATIONS.md), the
+Read the [public user guide](https://cobol.micutu.com/guide), [account and savings model](docs/FINANCE.md), [operations and incident response](docs/OPERATIONS.md), the
 [security audit and migration findings](docs/AUDIT.md), and the
 [product roadmap](docs/ROADMAP.md) before provisioning a new instance.
 Templates in `ops/` describe this VPS and depend on its global nginx Cloudflare maps.

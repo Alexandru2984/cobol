@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   core:
-    name: COBOL / Python ${{ matrix.python }}
+    name: COBOL, SQLite / Python ${{ matrix.python }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
     strategy:
@@ -34,9 +34,10 @@ jobs:
         run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Compile all COBOL sources
         run: |
+          python ops/generate-schema.py --check
           gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only persistence/sqlite_store.c
           make build
-      - name: Test backend, recovery and backup/rollback
+      - name: Test finance, migrations, replay, recovery, backup and public SEO
         run: |
           mkdir -p artifacts
           python -m pytest tests/ -v --junitxml=artifacts/pytest.xml
@@ -70,7 +71,7 @@ jobs:
           shellcheck backup.sh deploy.sh run_demo.sh
           node --check static/app.js
           node --check tests/browser_smoke.cjs
-          python3 -m compileall -q app.py security.py locking.py store.py imports.py migrate_store.py manage.py tests
+          python3 -m compileall -q app.py security.py locking.py store.py imports.py finance.py migrate_store.py upgrade_store.py manage.py ops tests
       - name: Validate workflow with actionlint
         run: |
           curl --fail --silent --show-error --location --output "$RUNNER_TEMP/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
