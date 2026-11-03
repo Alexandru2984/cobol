@@ -1,21 +1,18 @@
 """HTTP trust boundary for the fixed-width COBOL CGI protocol."""
-from contextlib import contextmanager
 from datetime import date
-import fcntl
 import hashlib
 import hmac
 import ipaddress
-import os
-from pathlib import Path
 import re
-import time
 from urllib.parse import parse_qsl, urlsplit
 
 from flask import abort, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from locking import ledger_lock
+from store import CATEGORIES
+
 SESSION_COOKIE = "__Host-ledger-session"
-CATEGORIES = {"Venituri", "Locuinta", "Mancare", "Hobby", "Utilitati"}
 FORM_LIMITS = {"cmd": 20, "user": 40, "pass": 40, "date": 10, "cat": 15,
                "desc": 30, "amount": 20, "id": 6, "csrf_token": 300, "month": 7, "cycle": 7, "due": 10, "create_key": 32}
 QUERY_LIMITS = {"filter": 15, "sort": 10, "from": 10, "to": 10,
@@ -100,22 +97,3 @@ def client_ip(trusted_proxies):
         return str(addr)
     except ValueError:
         return peer
-
-
-@contextmanager
-def ledger_lock(work_dir, timeout=2):
-    path = Path(work_dir) / "data" / ".ledger.lock"
-    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    try:
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("ledger busy") from None
-                time.sleep(0.02)
-        yield
-    finally:
-        os.close(descriptor)

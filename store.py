@@ -5,6 +5,7 @@ import sqlite3
 import stat
 
 APPLICATION_ID = 1279543122
+CATEGORIES = {"Venituri", "Locuinta", "Mancare", "Hobby", "Utilitati"}
 
 
 @contextmanager

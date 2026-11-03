@@ -13,8 +13,8 @@ import re
 import subprocess
 import tempfile
 
-from security import CATEGORIES, ledger_lock
-from store import connect
+from locking import ledger_lock
+from store import CATEGORIES, connect
 
 
 def native(binary, work, mode):
