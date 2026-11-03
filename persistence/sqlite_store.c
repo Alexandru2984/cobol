@@ -46,6 +46,10 @@ static int open_store(void) {
             || sqlite3_exec(db, ledger_schema_2, NULL, NULL, NULL) != SQLITE_OK
             || sqlite3_exec(db, "PRAGMA user_version=2; COMMIT; PRAGMA foreign_keys=ON;", NULL, NULL, NULL) != SQLITE_OK)
             return SQLITE_ERROR;
+        if (sqlite3_exec(db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) != SQLITE_OK
+            || sqlite3_exec(db, ledger_schema_3, NULL, NULL, NULL) != SQLITE_OK
+            || sqlite3_exec(db, "PRAGMA user_version=3; COMMIT;", NULL, NULL, NULL) != SQLITE_OK)
+            return SQLITE_ERROR;
     }
     int version = pragma_number("PRAGMA user_version");
     if (pragma_number("PRAGMA application_id") != APP_ID || version < 1 || version > 3)

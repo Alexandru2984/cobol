@@ -113,7 +113,7 @@ def health():
         try:
             with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
                 store_ok = (db.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-                            and db.execute("PRAGMA user_version").fetchone()[0] in {2, 3})
+                            and db.execute("PRAGMA user_version").fetchone()[0] == 3)
                 db.execute("SELECT id,day,category,description,amount_cents FROM ledger LIMIT 0")
         except (OSError, sqlite3.Error):
             store_ok = False

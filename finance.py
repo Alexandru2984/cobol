@@ -63,7 +63,45 @@ def accounts(db):
         + coalesce((SELECT sum(amount_cents) FROM transfers WHERE destination_id=a.id AND voided=0),0)
         - coalesce((SELECT sum(amount_cents) FROM transfers WHERE source_id=a.id AND voided=0),0) AS balance
         FROM accounts a ORDER BY a.active DESC,a.id""").fetchall()
-    return [{**dict(row), "reserved": 0, "available": max(0, row["balance"])} for row in rows]
+    reserved = {}
+    if db.execute("PRAGMA user_version").fetchone()[0] >= 3:
+        reserved = {row[0]: row[1] for row in db.execute("""SELECT g.account_id,coalesce(sum(c.amount_cents),0)
+            FROM savings_goals g LEFT JOIN goal_contributions c ON c.goal_id=g.id
+            WHERE g.state='active' GROUP BY g.account_id""")}
+    return [{**dict(row), "reserved": reserved.get(row["id"], 0),
+             "available": max(0, row["balance"]-reserved.get(row["id"], 0))} for row in rows]
+
+
+def goals(db):
+    db.row_factory = sqlite3.Row
+    rows = db.execute("""SELECT g.*,a.name AS account_name,a.active AS account_active,
+        coalesce(sum(c.amount_cents),0) AS saved FROM savings_goals g
+        JOIN accounts a ON a.id=g.account_id LEFT JOIN goal_contributions c ON c.goal_id=g.id
+        GROUP BY g.id ORDER BY CASE g.state WHEN 'active' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END,g.id DESC""").fetchall()
+    today = datetime.now(ZoneInfo(os.environ.get("LEDGER_TIMEZONE", "Europe/Bucharest"))).date()
+    result = []
+    for row in rows:
+        goal = dict(row)
+        if not 0 <= goal["saved"] <= goal["target_cents"]:
+            raise sqlite3.IntegrityError("Invalid goal allocation total")
+        goal.update(remaining=goal["target_cents"]-goal["saved"], progress=goal["saved"]*100//goal["target_cents"], overdue=False, monthly=None)
+        if goal["deadline"]:
+            due = date.fromisoformat(goal["deadline"])
+            goal["overdue"] = due < today and goal["remaining"] > 0 and goal["state"] == "active"
+            if due >= today and goal["remaining"]:
+                months = max(1,(due.year-today.year)*12+due.month-today.month+int(due.day>=today.day))
+                goal["monthly"] = (goal["remaining"]+months-1)//months
+        result.append(goal)
+    return result
+
+
+def find_goal(db, key, active=False):
+    goal = next((row for row in goals(db) if row["id"] == key), None)
+    if goal is None:
+        raise FinanceError("Obiectivul nu exista.", 404)
+    if active and goal["state"] != "active":
+        raise FinanceError("Reia obiectivul inainte de a modifica alocarea.", 409)
+    return goal
 
 
 def find_account(db, key, active=False):
@@ -121,8 +159,9 @@ def create_finance_blueprint(authorize, configured, work_dir):
     @bp.errorhandler(FinanceError)
     def invalid(error):
         session = session_token()
-        return render_template("finance_error.html", active="accounts", csrf=csrf_token(current_app.config["SECRET_KEY"], session),
-                               message=error.message, back="/accounts"), error.status
+        is_goal = request.path.startswith("/goals")
+        return render_template("finance_error.html", active="goals" if is_goal else "accounts", csrf=csrf_token(current_app.config["SECRET_KEY"], session),
+                               message=error.message, back="/goals" if is_goal else "/accounts"), error.status
 
     @contextmanager
     def access(limits=None):
@@ -257,5 +296,98 @@ def create_finance_blueprint(authorize, configured, work_dir):
                 return {"object_id": key}
             mutate(db, session, f"transfer-void:{key}", fields, action)
             return redirect("/accounts?notice=voided", code=303)
+
+    @bp.get("/goals")
+    def goals_overview():
+        query = parse_fields(request.query_string, {"edit": 6, "state": 10, "notice": 12})
+        state = query.get("state", "all")
+        if state not in {"all", "active", "completed", "archived"}:
+            abort(400)
+        with access() as (session, _, db):
+            all_goals, account_rows = goals(db), accounts(db)
+            edit = find_goal(db, int(query["edit"]), active=True) if query.get("edit") else None
+            history = db.execute("""SELECT c.*,g.name AS goal_name FROM goal_contributions c
+                JOIN savings_goals g ON g.id=c.goal_id ORDER BY c.id DESC LIMIT 20""").fetchall()
+            current = [goal for goal in all_goals if goal["state"] == "active"]
+            return page(session, "goals.html", active="goals", state=state,
+                        goals=[goal for goal in all_goals if state == "all" or goal["state"] == state],
+                        accounts=account_rows, edit=edit, history=history, notice=query.get("notice", ""),
+                        reserved=sum(g["saved"] for g in current), target=sum(g["target_cents"] for g in current),
+                        completed=sum(g["state"] == "completed" for g in all_goals),
+                        deficits=[a for a in account_rows if a["reserved"] > max(0,a["balance"])])
+
+    @bp.post("/goals/create")
+    def create_goal():
+        with access({"name": 30, "account": 6, "target": 20, "deadline": 10}) as (session, fields, db):
+            name, target = text_value(fields.get("name", "")), money(fields.get("target", ""), positive=True)
+            deadline = day_value(fields["deadline"]) if fields.get("deadline") else None
+            if not re.fullmatch(r"[0-9]{1,6}", fields.get("account", "")):
+                raise FinanceError("Alege contul obiectivului.")
+            account = int(fields["account"])
+            def action(connection):
+                find_account(connection, account, active=True)
+                if connection.execute("SELECT count(*) FROM savings_goals").fetchone()[0] >= 50:
+                    raise FinanceError("Poti pastra maximum 50 de obiective.", 409)
+                key = connection.execute("INSERT INTO savings_goals(name,account_id,target_cents,deadline,created_at) VALUES(?,?,?,?,?)",
+                    (name, account, target, deadline, int(time.time()))).lastrowid
+                return {"object_id": key}
+            mutate(db, session, "goal-create", fields, action)
+            return redirect("/goals?notice=saved", code=303)
+
+    @bp.post("/goals/<int:key>/save")
+    def save_goal(key):
+        with access({"name": 30, "target": 20, "deadline": 10}) as (session, fields, db):
+            name, target = text_value(fields.get("name", "")), money(fields.get("target", ""), positive=True)
+            deadline = day_value(fields["deadline"]) if fields.get("deadline") else None
+            def action(connection):
+                goal = find_goal(connection, key, active=True)
+                if target < goal["saved"]:
+                    raise FinanceError("Tinta nu poate fi mai mica decat suma deja alocata.", 409)
+                connection.execute("UPDATE savings_goals SET name=?,target_cents=?,deadline=? WHERE id=?", (name,target,deadline,key))
+                return {"object_id": key}
+            mutate(db, session, f"goal-save:{key}", fields, action)
+            return redirect("/goals?notice=saved", code=303)
+
+    @bp.post("/goals/<int:key>/contribute")
+    def contribute(key):
+        with access({"direction": 8, "amount": 20, "note": 60}) as (session, fields, db):
+            direction = fields.get("direction")
+            if direction not in {"allocate", "release"}:
+                abort(400)
+            amount = money(fields.get("amount", ""), positive=True)
+            note = text_value(fields.get("note") or ("Alocare" if direction == "allocate" else "Eliberare"), 60)
+            def action(connection):
+                goal = find_goal(connection, key, active=True)
+                account = find_account(connection, goal["account_id"], active=direction=="allocate")
+                if direction == "allocate" and (account["available"] < amount or goal["remaining"] < amount):
+                    raise FinanceError("Suma depaseste disponibilul contului sau ce mai ramane pana la tinta.", 409)
+                if direction == "release" and goal["saved"] < amount:
+                    raise FinanceError("Nu poti elibera mai mult decat suma alocata.", 409)
+                connection.execute("INSERT INTO goal_contributions(goal_id,amount_cents,note,created_at) VALUES(?,?,?,?)",
+                    (key, amount if direction == "allocate" else -amount, note, int(time.time())))
+                return {"object_id": key}
+            mutate(db, session, f"goal-contribute:{key}", fields, action)
+            return redirect("/goals?notice=allocated", code=303)
+
+    @bp.post("/goals/<int:key>/status")
+    def goal_status(key):
+        with access({"state": 10}) as (session, fields, db):
+            state = fields.get("state")
+            if state not in {"active", "completed", "archived"}:
+                abort(400)
+            def action(connection):
+                goal = find_goal(connection, key)
+                if state == "archived" and goal["saved"]:
+                    raise FinanceError("Elibereaza alocarea inainte de arhivare, sau finalizeaza obiectivul finantat integral.", 409)
+                if state == "completed" and goal["remaining"]:
+                    raise FinanceError("Atinge tinta inainte de a finaliza obiectivul.", 409)
+                if state == "active" and goal["state"] != "active":
+                    account = find_account(connection, goal["account_id"], active=True)
+                    if account["available"] < goal["saved"]:
+                        raise FinanceError("Soldul nu acopera alocarea istorica. Nu poti relua inca obiectivul.", 409)
+                connection.execute("UPDATE savings_goals SET state=? WHERE id=?", (state,key))
+                return {"object_id": key}
+            mutate(db, session, f"goal-status:{key}", fields, action)
+            return redirect("/goals?notice=saved", code=303)
 
     return bp

@@ -1497,6 +1497,7 @@ PERFORM BUILD-NAV-QS.
             "<a data-nav='RECURRING' href='?view=RECURRING'>"
             "<span aria-hidden='true'>&#8635;</span> Recurente</a>"
             "<a href='/accounts'><span aria-hidden='true'>&#9633;</span> Conturi</a>"
+            "<a href='/goals'><span aria-hidden='true'>&#9676;</span> Obiective</a>"
             "<a href='/import'><span aria-hidden='true'>&#8595;</span> Import CSV</a>"
             "<a data-nav='AUDIT' href='?view=AUDIT'>"
             "<span aria-hidden='true'>&#9678;</span> Activitate</a></nav>"

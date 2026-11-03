@@ -9,7 +9,7 @@ import sqlite3
 from locking import ledger_lock
 from store import connect
 
-LATEST_VERSION = 2
+LATEST_VERSION = 3
 MIGRATIONS = Path(__file__).resolve().parent / "migrations"
 
 

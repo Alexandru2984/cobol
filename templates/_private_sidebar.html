@@ -2,7 +2,7 @@
   <a class="brand" href="/"><span class="brand-mark">L<span>·</span></span><span>Ledger<span class="brand-small">OF AGES</span></span></a>
   <p class="sidebar-label">SPATIUL TAU FINANCIAR</p>
   <nav aria-label="Navigare principala">
-    {% for key, path, icon, label in [('ledger','/','▦','Tranzactii'),('report','/?view=REPORT','↗','Raport lunar'),('budget','/?view=BUDGET','◉','Bugete'),('recurring','/?view=RECURRING','⇄','Recurente'),('accounts','/accounts','▣','Conturi'),('import','/import','↓','Import CSV'),('audit','/?view=AUDIT','◎','Activitate')] %}
+    {% for key, path, icon, label in [('ledger','/','▦','Tranzactii'),('report','/?view=REPORT','↗','Raport lunar'),('budget','/?view=BUDGET','◉','Bugete'),('recurring','/?view=RECURRING','⇄','Recurente'),('accounts','/accounts','▣','Conturi'),('goals','/goals','◌','Obiective'),('import','/import','↓','Import CSV'),('audit','/?view=AUDIT','◎','Activitate')] %}
     <a href="{{ path }}"{% if active == key %} aria-current="page"{% endif %}><span aria-hidden="true">{{ icon }}</span> {{ label }}</a>
     {% endfor %}
   </nav>
