@@ -59,9 +59,9 @@ cobc -x -free -I "$release" "$release/ledger.cbl" "$release/sha256.cbl" -o "$rel
 cobc -x -free "$release/seed.cbl" -o "$release/seed"
 "$PYTHON" -m py_compile "$release/app.py" "$release/security.py"
 LEDGER_TEST_BIN="$release/ledger.cgi" "$PYTHON" -m pytest "$release/tests" -q -p no:cacheprovider
-sudo -n /usr/local/sbin/cobol-ledger-backup
 touch "$APP_DIR/data/.deploying"
 maintenance=1
+sudo -n /usr/local/sbin/cobol-ledger-backup
 ln -s -- "$release" "$RELEASES_DIR/.current-next"
 mv -Tf -- "$RELEASES_DIR/.current-next" "$CURRENT"
 activated=1

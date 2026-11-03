@@ -156,6 +156,10 @@ def index():
     env["CONTENT_LENGTH"] = str(len(input_data or b""))
     try:
         with ledger_lock(WORK_DIR):
+            # A request may have waited behind the deployment's snapshot lock.
+            # Check again here so it cannot write to the previous store afterward.
+            if request.method == "POST" and Path(WORK_DIR, "data", ".deploying").exists():
+                abort(503, "Actualizare in curs. Reincearca in cateva secunde.")
             password_hash = os.environ.get("LEDGER_PASSWORD_HASH")
             if password_hash:
                 env["LEDGER_AUTH_MODE"] = "scrypt"

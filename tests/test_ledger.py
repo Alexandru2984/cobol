@@ -771,6 +771,29 @@ def test_recurring_recovery_before_deleting_interrupted_occurrence(client,workdi
     assert b"Abonament" not in client.get("/?export=csv",headers=headers).data
 
 
+def test_waiting_request_rechecks_maintenance_under_lock(client, workdir, monkeypatch):
+    from contextlib import contextmanager
+    import app
+    _, headers = login(client)
+    gate = workdir / "data/.deploying"
+    original_lock = app.ledger_lock
+
+    @contextmanager
+    def deployment_started_while_waiting(*args, **kwargs):
+        with original_lock(*args, **kwargs):
+            if app.request.method == "POST":
+                gate.touch()
+            yield
+
+    monkeypatch.setattr(app, "ledger_lock", deployment_started_while_waiting)
+    try:
+        response = add(client, headers, "2026-07-01", "Hobby", "blocked during deploy", "1")
+        assert response.status_code == 503
+    finally:
+        gate.unlink(missing_ok=True)
+    assert b"blocked during deploy" not in client.get("/", headers=headers).data
+
+
 def test_maintenance_gate_refuses_mutations(client,workdir):
     _,headers=login(client)
     gate=workdir/"data/.deploying";gate.touch()
