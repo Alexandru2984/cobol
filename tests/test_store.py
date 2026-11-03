@@ -30,6 +30,9 @@ def test_sql_constraints_reject_invalid_dates_and_amounts(client, workdir):
 
 def test_health_detects_unavailable_store(client, workdir):
     login(client)
+    with connect(workdir) as db:
+        db.execute("DROP TABLE savings_goals")
+    assert client.get("/health").status_code == 503
     (workdir / "data/ledger.sqlite3").write_bytes(b"broken SQL store")
     response = client.get("/health")
     assert response.status_code == 503 and response.json["checks"]["store"] is False

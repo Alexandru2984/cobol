@@ -126,6 +126,11 @@ def health():
                 store_ok = (db.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
                             and db.execute("PRAGMA user_version").fetchone()[0] == 3)
                 db.execute("SELECT id,day,category,description,amount_cents FROM ledger LIMIT 0")
+                db.execute("SELECT account_id FROM ledger LIMIT 0")
+                db.execute("SELECT id,opening_cents FROM accounts LIMIT 0")
+                db.execute("SELECT id,source_id,destination_id FROM transfers LIMIT 0")
+                db.execute("SELECT id,target_cents FROM savings_goals LIMIT 0")
+                db.execute("SELECT goal_id,amount_cents FROM goal_contributions LIMIT 0")
         except (OSError, sqlite3.Error):
             store_ok = False
     checks = {
