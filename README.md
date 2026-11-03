@@ -1,10 +1,12 @@
 # Ledger of Ages
 
-Personal finance in COBOL: an ISAM ledger with a responsive web interface,
+Personal finance in COBOL: a SQLite transaction ledger with a responsive web interface,
 filtered reports and CSV export.
 Public presentation: [cobol.micutu.com/about](https://cobol.micutu.com/about). Live at [cobol.micutu.com](https://cobol.micutu.com).
 
 The transaction engine, validation, sessions, audit and reports run in GnuCOBOL.
+Native transaction persistence uses a small C/SQLite adapter with integer cents;
+budgets, sessions and recurring journals retain their indexed COBOL files.
 Flask provides the HTTP/CGI security boundary; scrypt verification uses Werkzeug.
 No database service, CDN fonts or JavaScript framework is required.
 
@@ -40,7 +42,8 @@ venv/bin/python app.py
 
 Production cookies require HTTPS; Chromium treats loopback as a secure development
 context. For other hosts, use local HTTPS. `./run_demo.sh` builds demo data in a disposable
-directory; `./seed` refuses to overwrite an existing ledger unless explicitly forced.
+directory, including the checked legacy-to-SQLite migration. `./seed` creates legacy
+demo data only; it refuses to overwrite an existing legacy ledger unless explicitly forced.
 `make test` compiles its own binary and keeps all test data outside production.
 
 ## Production and audit

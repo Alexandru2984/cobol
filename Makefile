@@ -4,7 +4,7 @@ COBC   ?= cobc
 .PHONY: build seed test demo deploy clean
 
 build:
-	$(COBC) -x -free -I . ledger.cbl sha256.cbl -o ledger.cgi
+	$(COBC) -x -free -I . ledger.cbl sha256.cbl persistence/sqlite_store.c -lsqlite3 -o ledger.cgi
 	$(COBC) -x -free seed.cbl -o seed
 	$(COBC) -x -free hello.cbl -o hello.cgi
 

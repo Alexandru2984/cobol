@@ -29,7 +29,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
       - name: Install native dependencies
-        run: sudo apt-get update && sudo apt-get install -y gnucobol db5.3-util
+        run: sudo apt-get update && sudo apt-get install -y gnucobol db5.3-util libsqlite3-dev
       - name: Install Python dependencies
         run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Compile all COBOL sources
@@ -97,7 +97,7 @@ jobs:
           cache-dependency-path: tools/browser/package-lock.json
       - name: Install backend dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y gnucobol
+          sudo apt-get update && sudo apt-get install -y gnucobol libsqlite3-dev
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Install pinned browser tooling
         run: |

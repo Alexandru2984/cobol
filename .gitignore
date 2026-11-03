@@ -44,6 +44,7 @@ artifacts/
 # Deployment gate and alternate ISAM index files
 data/.deploying
 data/*.dat.*
+data/*.sqlite3*
 
 # Isolated CI browser tooling
 tools/browser/node_modules/

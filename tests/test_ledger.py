@@ -31,6 +31,7 @@ def workdir(tmp_path_factory):
         subprocess.run(
             ["cobc", "-x", "-free", "-I", ROOT, os.path.join(ROOT, "ledger.cbl"),
              os.path.join(ROOT, "sha256.cbl"),
+             os.path.join(ROOT, "persistence/sqlite_store.c"), "-lsqlite3",
              "-o", str(wd / "ledger.cgi")],
             check=True,
         )
@@ -47,7 +48,7 @@ def client(workdir, monkeypatch):
     monkeypatch.setenv("LEDGER_PASS", PASS)
     monkeypatch.delenv("LEDGER_PASS_HASH", raising=False)
     monkeypatch.delenv("LEDGER_SESSION_TTL", raising=False)
-    for name in ("ledger.dat", "sessions.dat", "lockout.dat",
+    for name in ("ledger.dat", "ledger.dat.1", "ledger.sqlite3", "ledger.sqlite3-journal", "sessions.dat", "lockout.dat",
                  "audit.log", "budgets.dat", "budgets.dat.1", "recurring.dat", "recurring.dat.1", "occurrences.dat",
                  "occurrences.dat.1", "occurrences.dat.2"):
         p = workdir / "data" / name
@@ -637,14 +638,15 @@ def test_corrupt_budget_storage_fails_without_overwriting(client, workdir):
     assert path.read_bytes() == broken
 
 
-@pytest.mark.parametrize("name", ["ledger.dat", "sessions.dat", "lockout.dat"])
+@pytest.mark.parametrize("name", ["ledger.sqlite3", "sessions.dat", "lockout.dat"])
 def test_existing_corrupt_isam_is_never_recreated(client, workdir, name):
     _, headers = login(client)
+    token = re.search(rb"name='csrf_token' value='([^']+)'", client.get("/", headers=headers).data)[1].decode()
     path = workdir / "data" / name
     broken = b"invalid database must be preserved"
     path.write_bytes(broken)
-    if name == "ledger.dat":
-        response = add(client, headers, "2026-07-01", "Hobby", "must not write", "1")
+    if name == "ledger.sqlite3":
+        response = client.post("/", headers=headers, csrf=False, data={"cmd": "add", "date": "2026-07-01", "cat": "Hobby", "desc": "must not write", "amount": "1", "csrf_token": token})
         assert client.get("/?export=csv", headers=headers).status_code == 503
     else:
         response, issued = login(client)

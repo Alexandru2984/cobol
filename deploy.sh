@@ -25,6 +25,8 @@ mkdir -m 700 -- "$release"
 activated=0
 committed=0
 maintenance=0
+first_sql=0
+[[ -f $previous/persistence/sqlite_store.c ]] || first_sql=1
 rollback() {
     code=$?
     trap - EXIT
@@ -34,10 +36,20 @@ rollback() {
             echo 'Recovery failed; keep current release and maintenance gate for operator review.' >&2
             exit 1
         }
+        if (( first_sql )); then
+            "$PYTHON" "$release/migrate_store.py" --work-dir "$APP_DIR" --rollback || {
+                echo 'Store rollback refused; keep maintenance gate for operator review.' >&2; exit 1;
+            }
+        fi
         ln -s -- "$previous" "$RELEASES_DIR/.current-next"
         mv -Tf -- "$RELEASES_DIR/.current-next" "$CURRENT"
         sudo -n systemctl restart "$SERVICE"
         printf 'Rolled back to %s\n' "$previous" >&2
+    fi
+    if (( maintenance && ! activated && first_sql )); then
+        "$PYTHON" "$release/migrate_store.py" --work-dir "$APP_DIR" --rollback || {
+            echo 'Store rollback refused; keep maintenance gate for operator review.' >&2; exit 1;
+        }
     fi
     if (( maintenance )); then rm -f -- "$APP_DIR/data/.deploying"; fi
     if (( ! committed )); then rm -rf -- "$release"; fi
@@ -55,13 +67,17 @@ for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
         if actual != expected:
             raise SystemExit(f"Runtime mismatch: {name} {actual}, expected {expected}")
 PYVERSIONS
-cobc -x -free -I "$release" "$release/ledger.cbl" "$release/sha256.cbl" -o "$release/ledger.cgi"
+cobc -x -free -I "$release" "$release/ledger.cbl" "$release/sha256.cbl" "$release/persistence/sqlite_store.c" -lsqlite3 -o "$release/ledger.cgi"
 cobc -x -free "$release/seed.cbl" -o "$release/seed"
 "$PYTHON" -m py_compile "$release/app.py" "$release/security.py"
 LEDGER_TEST_BIN="$release/ledger.cgi" "$PYTHON" -m pytest "$release/tests" -q -p no:cacheprovider
 touch "$APP_DIR/data/.deploying"
 maintenance=1
+if (( first_sql )); then
+    (cd -- "$APP_DIR" && flock -x -w 30 data/.ledger.lock env LEDGER_RECOVER_ONLY=1 "$previous/ledger.cgi")
+fi
 sudo -n /usr/local/sbin/cobol-ledger-backup
+"$PYTHON" "$release/migrate_store.py" --work-dir "$APP_DIR" --binary "$release/ledger.cgi"
 ln -s -- "$release" "$RELEASES_DIR/.current-next"
 mv -Tf -- "$RELEASES_DIR/.current-next" "$CURRENT"
 activated=1

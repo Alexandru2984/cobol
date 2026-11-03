@@ -4,6 +4,7 @@ import argparse
 import hashlib
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
@@ -30,8 +31,13 @@ with tempfile.TemporaryDirectory(prefix="ledger-restore-check-") as scratch:
                 raise SystemExit("Links/devices are not accepted")
         source.extractall(scratch, filter="data")
     files = sorted((Path(scratch) / "data").glob("*.dat*"))
-    if not (Path(scratch) / "data" / "ledger.dat").is_file():
+    sql = Path(scratch) / "data/ledger.sqlite3"
+    if not sql.is_file() and not (Path(scratch) / "data" / "ledger.dat").is_file():
         raise SystemExit("Ledger missing from backup")
+    if sql.is_file():
+        with sqlite3.connect(sql.as_uri() + "?mode=ro", uri=True) as db:
+            if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)] or db.execute("PRAGMA foreign_key_check").fetchall():
+                raise SystemExit("SQLite integrity check failed")
     for path in files:
         subprocess.run(["db5.3_verify", "-q", str(path)], check=True)
-    print(f"RESTORE_CHECK_OK: checksum and {len(files)} ISAM files verified; production untouched")
+    print(f"RESTORE_CHECK_OK: checksum, SQLite={sql.is_file()} and {len(files)} ISAM files verified; production untouched")

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Consistent ISAM snapshot; coordinates with every CGI request through flock.
+# Consistent SQLite/ISAM snapshot; coordinates with every writer through flock.
 set -Eeuo pipefail
 umask 077
 APP_DIR=${LEDGER_APP_DIR:-/srv/canary/cobol.micutu.com/app}
@@ -32,8 +32,16 @@ python3 - "$APP_DIR" "$staging/$name" <<'PYSNAPSHOT'
 from pathlib import Path
 import sys, tarfile
 app = Path(sys.argv[1])
+import sqlite3
+database = app / "data/ledger.sqlite3"
+if database.exists():
+    if database.is_symlink() or not database.is_file():
+        raise RuntimeError("Unsafe SQLite file")
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
+        if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)] or db.execute("PRAGMA foreign_key_check").fetchall():
+            raise RuntimeError("SQLite integrity check failed")
 def include(member):
-    if member.name in {"data/.ledger.lock", "data/.deploying"} or member.name == "data/backups" or member.name.startswith("data/backups/"):
+    if member.name in {"data/.ledger.lock", "data/.deploying"} or member.name == "data/backups" or member.name.startswith(("data/backups/", "data/.sql-migration-")):
         return None
     if not (member.isfile() or member.isdir()):
         raise RuntimeError("Snapshot refuses links and special files")
@@ -44,9 +52,15 @@ PYSNAPSHOT
 flock -u 9
 gzip -t "$staging/$name"
 python3 - "$staging/$name" "$staging" <<'PYEXTRACT'
-import sys, tarfile
+import sys, tarfile, sqlite3
+from pathlib import Path
 with tarfile.open(sys.argv[1]) as archive:
     archive.extractall(sys.argv[2], filter="data")
+database = Path(sys.argv[2]) / "data/ledger.sqlite3"
+if database.exists():
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
+        if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)] or db.execute("PRAGMA foreign_key_check").fetchall():
+            raise RuntimeError("Restored SQLite integrity check failed")
 PYEXTRACT
 for database in "$staging/data"/*.dat*; do
     if [[ -f $database ]]; then

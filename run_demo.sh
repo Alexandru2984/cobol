@@ -15,10 +15,11 @@ echo "1. Compilare Seed (Populare ISAM)..."
 cobc -x -free "$SRC_DIR/seed.cbl" -o seed
 
 echo "2. Compilare Ledger (Core logic)..."
-cobc -x -free -I "$SRC_DIR" "$SRC_DIR/ledger.cbl" "$SRC_DIR/sha256.cbl" -o ledger.cgi
+cobc -x -free -I "$SRC_DIR" "$SRC_DIR/ledger.cbl" "$SRC_DIR/sha256.cbl" "$SRC_DIR/persistence/sqlite_store.c" -lsqlite3 -o ledger.cgi
 
 echo "3. Executie Populare Baza de Date..."
 ./seed
+python3 "$SRC_DIR/migrate_store.py" --work-dir "$DEMO_DIR" --binary "$DEMO_DIR/ledger.cgi"
 
 echo "4. Generare Raport Web (COBOL CGI Output)..."
 echo "------------------------------------------------"

@@ -109,6 +109,8 @@ def health():
         "data_dir": os.path.isdir(os.path.join(WORK_DIR, "data")) and os.access(
             os.path.join(WORK_DIR, "data"), os.R_OK | os.W_OK | os.X_OK),
         "configuration": configured(),
+        "store": (not Path(WORK_DIR, "data/ledger.dat").exists()
+                  or Path(WORK_DIR, "data/ledger.sqlite3").is_file()),
     }
     ok = all(checks.values())
     return jsonify(status="ok" if ok else "degraded", checks=checks), 200 if ok else 503
@@ -192,6 +194,8 @@ def index():
 
 
 def cgi_response(stdout, current_csrf, form):
+    if b"\x1eLEDGER_STORAGE_ERROR" in stdout:
+        abort(503, "Datele nu pot fi accesate in siguranta.")
     raw = stdout.decode("utf-8", errors="replace")
     separator = next((sep for sep in ("\r\n\r\n", "\n\n", "\n \n") if sep in raw), None)
     if not separator:

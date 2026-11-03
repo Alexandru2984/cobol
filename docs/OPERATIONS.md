@@ -4,11 +4,11 @@
 
 - Repo: `/srv/canary/cobol.micutu.com/app`, GitHub `Alexandru2984/cobol`.
 - Cod activ și binar: symlink atomic `../current` spre un folder din `../releases`.
-- Date: `app/data/`; formatul ISAM al tranzacțiilor este păstrat.
+- Date: `app/data/ledger.sqlite3` pentru tranzacții; originalele ISAM sunt păstrate numai pentru arhivă, mod 0400.
 - Bugete: `data/budgets.dat`, cheie lună + categorie, creat la prima salvare.
   Backup-ul verifică toate fișierele `*.dat*`, inclusiv fișierele noi.
 - Python: `../current/runtime` pointează spre mediul versionat al release-ului; serviciu: `cobol-canary.service`, loopback port 9001.
-- Traseu verificat: Cloudflare → vhost nginx → gunicorn → binar COBOL → ISAM.
+- Traseu verificat: Cloudflare → vhost nginx → gunicorn → binar COBOL → SQLite / ISAM.
   Mai există nginx-uri pentru alte aplicații; nu sunt un al doilea backend al acestui proiect.
   Configurația remote a tunelului Cloudflare nu este versionată aici.
 - `ops/nginx.conf` depinde de zonele globale `cobol_limit` și `from_cloudflare_origin`.
@@ -44,7 +44,7 @@ CGI trebuie expus exclusiv prin bridge-ul Flask, care verifică CSRF și limitel
 într-un release nou, rulează toate testele izolat, face backup verificat, schimbă
 symlink-ul atomic, repornește serviciul și verifică health + formularul cu CSRF.
 Dacă readiness sau smoke check eșuează, revine automat la release-ul anterior.
-Datele nu se restaurează la rollback de cod; etapele curente nu schimbă schema ISAM.
+Datele nu se restaurează la rollback de cod. Prima migrare SQLite verifică toate rândurile și poate reveni automat numai cât timp registrul migrat nu a fost modificat. După activare, rollback-ul de cod trebuie să folosească un release compatibil SQLite; vezi [procedura de migrare](SQLITE.md).
 Configurațiile systemd/nginx se instalează separat, cu backup al configurației precedente,
 `systemd-analyze verify` / `nginx -t` și apoi reload. Dependențele Python se pregătesc într-un mediu separat, cu versiunile fixate în requirements.
 `LEDGER_RUNTIME_ENV=/cale/catre/venv ./deploy.sh` leagă mediul de noul release; scriptul
@@ -56,7 +56,7 @@ Primul deploy folosește helperul vechi de backup (oprește serviciul), până c
 cererile live trec prin noul lock. Helperul nou se instalează după activarea noului release. Nu folosi un symlink spre
 checkout-ul de lucru: un edit în repo nu trebuie să schimbe codul servit.
 
-Rollback manual, înlocuind calea cu release-ul anterior verificat:
+Rollback manual, înlocuind calea cu un release anterior verificat și compatibil SQLite:
 
 ```bash
 ln -s /srv/canary/cobol.micutu.com/releases/RELEASE_ANTERIOR ../releases/.current-next
