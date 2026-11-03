@@ -21,3 +21,5 @@
 @media(max-width:900px) and (min-width:601px){.sidebar nav{grid-template-columns:repeat(5,minmax(0,1fr))}}
 @media(max-width:600px){.sidebar nav a:last-child{grid-column:1/-1}.rule-actions{align-items:stretch;display:grid;grid-template-columns:1fr 1fr}.rule-actions form:first-child{grid-column:1/-1}.rule-actions .btn{width:100%;font-size:11px}.rule-actions form .budget-remove{width:100%}.rule-card{padding:22px 18px}}
 @media print{.rule-actions,#rule-form{display:none}}
+@media(max-width:900px) and (min-width:601px){.sidebar nav{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:600px){.sidebar nav a:last-child{grid-column:auto}}

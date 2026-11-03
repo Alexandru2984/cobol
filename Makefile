@@ -10,6 +10,7 @@ build:
 
 seed: build
 	./seed
+	$(PYTHON) migrate_store.py --work-dir . --binary ./ledger.cgi
 
 test:
 	$(PYTHON) -m pytest tests/ -v

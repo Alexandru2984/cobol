@@ -28,6 +28,26 @@ def test_sql_constraints_reject_invalid_dates_and_amounts(client, workdir):
                 db.execute("INSERT INTO ledger(day,category,description,amount_cents) VALUES(?,'Hobby','invalid',?)", (day, money))
 
 
+def test_health_detects_unavailable_store(client, workdir):
+    login(client)
+    (workdir / "data/ledger.sqlite3").write_bytes(b"broken SQL store")
+    response = client.get("/health")
+    assert response.status_code == 503 and response.json["checks"]["store"] is False
+
+
+def test_seed_refuses_sqlite_and_corrupt_legacy_even_without_force(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    seed = tmp_path / "seed"
+    subprocess.run(["cobc", "-x", "-free", str(Path(ROOT) / "seed.cbl"), "-o", str(seed)], check=True)
+    for name in ("ledger.sqlite3", "ledger.dat"):
+        path = data / name
+        path.write_bytes(b"must not overwrite")
+        result = subprocess.run([str(seed)], cwd=tmp_path, capture_output=True)
+        assert result.returncode != 0 and path.read_bytes() == b"must not overwrite"
+        path.unlink()
+
+
 def test_legacy_presence_requires_explicit_migration(client, workdir):
     path = workdir / "data/ledger.dat"
     path.write_bytes(b"must not be replaced")

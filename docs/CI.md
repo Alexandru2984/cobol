@@ -7,11 +7,12 @@ limitate la citirea codului; Actions sunt fixate la SHA-uri de commit.
 ## Verificări
 
 - Matrice Python 3.12 / 3.14 cu binarul COBOL compilat și teste de autentificare,
-  validare, bugete, recurente, recuperare, backup și rollback.
+  validare, bugete, recurente, migrare SQLite, import CSV, recuperare, backup și rollback.
 - Shellcheck, sintaxă Python/JavaScript și actionlint pentru workflow.
 - Audit pip-audit al tuturor pachetelor runtime/test fixate și npm audit pentru tooling.
 - Chromium cu date sintetice, la lățimi între 320 și 1440 px: login, CRUD, filtre,
-  rapoarte, bugete, recurente, dialoguri și logout.
+  rapoarte, bugete, recurente, mapare/previzualizare/import CSV, dialoguri și logout.
+- Adaptorul C este verificat cu GCC `-Wall -Wextra -Werror` înaintea compilării native.
 - Axe pentru reguli WCAG 2 A/AA și 2.1 AA pe fluxurile principale. Scanarea automată
   completează verificările manuale; nu constituie certificare de accesibilitate.
 - Rapoarte JUnit, audit JSON, accesibilitate JSON și capturi păstrate 7 zile.

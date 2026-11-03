@@ -1,10 +1,12 @@
 """Flask/WSGI bridge for the COBOL ledger, with a strict HTTP trust boundary."""
 from datetime import datetime
+from contextlib import closing
 import logging
 import os
 from pathlib import Path
 import re
 import secrets
+import sqlite3
 import subprocess
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
@@ -16,6 +18,7 @@ from werkzeug.security import check_password_hash
 from security import (FORM_LIMITS, QUERY_LIMITS, SESSION_COOKIE, client_ip,
                       csrf_token, ledger_lock, parse_fields, session_token,
                       verify_csrf)
+from store import APPLICATION_ID
 
 BASE_DIR = Path(__file__).resolve().parent
 BIN_PATH = os.environ.get("LEDGER_BIN", str(BASE_DIR / "ledger.cgi"))
@@ -104,13 +107,22 @@ def sitemap():
 
 @app.route("/health")
 def health():
+    database = Path(WORK_DIR, "data/ledger.sqlite3")
+    store_ok = not Path(WORK_DIR, "data/ledger.dat").exists() and not database.exists()
+    if database.is_file() and not database.is_symlink():
+        try:
+            with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+                store_ok = (db.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
+                            and db.execute("PRAGMA user_version").fetchone()[0] == 1)
+                db.execute("SELECT id,day,category,description,amount_cents FROM ledger LIMIT 0")
+        except (OSError, sqlite3.Error):
+            store_ok = False
     checks = {
         "binary": os.access(BIN_PATH, os.X_OK),
         "data_dir": os.path.isdir(os.path.join(WORK_DIR, "data")) and os.access(
             os.path.join(WORK_DIR, "data"), os.R_OK | os.W_OK | os.X_OK),
         "configuration": configured(),
-        "store": (not Path(WORK_DIR, "data/ledger.dat").exists()
-                  or Path(WORK_DIR, "data/ledger.sqlite3").is_file()),
+        "store": store_ok,
     }
     ok = all(checks.values())
     return jsonify(status="ok" if ok else "degraded", checks=checks), 200 if ok else 503
@@ -137,23 +149,7 @@ def index():
             abort(503, "Actualizare in curs. Reincearca in cateva secunde.")
         if form["cmd"] in {"budget-save", "budget-del"} and "month" not in form:
             abort(400, "Luna este obligatorie.")
-    # Never forward the host process environment or unverified client cookies.
-    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TZ": "UTC"}
-    for key in ("LEDGER_USER", "LEDGER_PASS", "LEDGER_PASS_HASH", "LEDGER_SESSION_TTL"):
-        if key in os.environ:
-            env[key] = os.environ[key]
-    env.update({
-        "REQUEST_METHOD": request.method, "QUERY_STRING": urlencode(query),
-        "HTTP_COOKIE": f"session={session}" if session else "",
-        "REMOTE_ADDR": client_ip(os.environ.get(
-            "LEDGER_TRUSTED_PROXIES", "127.0.0.1/32,::1/128").split(",")),
-        "LEDGER_CSRF_TOKEN": csrf_token(app.config["SECRET_KEY"], session),
-        "LEDGER_AUTH_MODE": "legacy", "LEDGER_AUTH_VERIFIED": "N",
-        "LEDGER_NOTICE": query.get("notice", ""),
-        "LEDGER_RULE_KEY": secrets.token_hex(16),
-        "LEDGER_LOCAL_TODAY": datetime.now(ZoneInfo(
-            os.environ.get("LEDGER_TIMEZONE", "Europe/Bucharest"))).date().isoformat(),
-    })
+    env = native_environment(session, query)
     input_data = urlencode(form).encode("ascii") if request.method == "POST" else None
     env["CONTENT_LENGTH"] = str(len(input_data or b""))
     try:
@@ -191,6 +187,48 @@ def index():
     if stderr:
         logger.warning("backend_stderr request=%s bytes=%s", g.request_id, len(stderr))
     return cgi_response(stdout, env["LEDGER_CSRF_TOKEN"], form)
+
+
+def native_environment(session, query=None):
+    query = query or {}
+    # Never forward the host process environment or unverified client cookies.
+    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TZ": "UTC"}
+    for key in ("LEDGER_USER", "LEDGER_PASS", "LEDGER_PASS_HASH", "LEDGER_SESSION_TTL"):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    env.update({
+        "REQUEST_METHOD": request.method, "QUERY_STRING": urlencode(query),
+        "HTTP_COOKIE": f"session={session}" if session else "",
+        "REMOTE_ADDR": client_ip(os.environ.get(
+            "LEDGER_TRUSTED_PROXIES", "127.0.0.1/32,::1/128").split(",")),
+        "LEDGER_CSRF_TOKEN": csrf_token(app.config["SECRET_KEY"], session),
+        "LEDGER_AUTH_MODE": "legacy", "LEDGER_AUTH_VERIFIED": "N",
+        "LEDGER_NOTICE": query.get("notice", ""),
+        "LEDGER_RULE_KEY": secrets.token_hex(16),
+        "LEDGER_LOCAL_TODAY": datetime.now(ZoneInfo(
+            os.environ.get("LEDGER_TIMEZONE", "Europe/Bucharest"))).date().isoformat(),
+    })
+    return env
+
+
+def native_authorize(session, recover=False):
+    """Called only while holding ledger_lock; no admin switches come from HTTP."""
+    env = native_environment(session)
+    env.update(LEDGER_AUTH_ONLY="2" if recover else "1", CONTENT_LENGTH="0")
+    result = subprocess.run([BIN_PATH], input=b"", capture_output=True, env=env,
+                            cwd=WORK_DIR, timeout=SUBPROCESS_TIMEOUT)
+    if result.returncode or len(result.stdout) > 1024:
+        abort(503, "Autentificarea registrului este indisponibila.")
+    match = re.search(rb"^Status: (204|401|503)\b", result.stdout)
+    if not match:
+        abort(503)
+    status = int(match[1])
+    if status != 204:
+        abort(status)
+    reserved = re.search(rb"X-Ledger-Reserved: ([0-9]{6})", result.stdout)
+    if not reserved:
+        abort(503)
+    return int(reserved[1])
 
 
 def cgi_response(stdout, current_csrf, form):
@@ -235,6 +273,10 @@ def cgi_response(stdout, current_csrf, form):
         response.headers["Location"] = "/" + ("?" + urlencode(target) if target else "")
         response.set_data("")
     return response
+
+
+from imports import create_import_blueprint
+app.register_blueprint(create_import_blueprint(native_authorize, configured, WORK_DIR))
 
 
 if __name__ == "__main__":

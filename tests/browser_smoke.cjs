@@ -156,10 +156,41 @@ const output = process.env.LEDGER_SCREENSHOT_DIR || '/tmp';
  await firstDelete.getByRole('button').click();
  await Promise.all([page.waitForNavigation(),page.getByRole('button',{name:'Sterge tranzactia',exact:true}).click()]);
  assert.equal(await page.locator('[data-transaction]').count(),5);
+ await page.getByRole('link',{name:'Import CSV',exact:true}).click();
+ await checkAccessibility('import-upload');
+ await page.locator('#csv-file').setInputFiles({name:'browser-import.csv',mimeType:'text/csv',buffer:Buffer.from('data,categorie,descriere,suma\n2026-02-01,Venituri,CSV salariu,100.01\n2026-02-02,Mancare,CSV cumparaturi,-10.02\n2026-02-02,Mancare,CSV cumparaturi,-10.02\n')});
+ await Promise.all([page.waitForNavigation(),page.getByRole('button',{name:'Continua la coloane'}).click()]);
+ assert.equal(await page.locator('#map-day').inputValue(),'0');
+ await checkAccessibility('import-mapping');
+ for(const width of [320,375,390,768,1440]) {
+  await page.setViewportSize({width,height:900});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`import mapping overflow ${width}`);
+ }
+ await Promise.all([page.waitForNavigation(),page.getByRole('button',{name:'Verifica tranzactiile'}).click()]);
+ assert.match(await page.locator('main').innerText(),/Duplicat · omis/);
+ await checkAccessibility('import-preview');
+ for(const width of [320,375,390,768,1440]) {
+  await page.setViewportSize({width,height:900});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`import preview overflow ${width}`);
+  if([390,1440].includes(width)) await page.screenshot({path:path.join(output,`ledger-import-${width}.png`),fullPage:true});
+ }
+ const confirmation=await page.locator('form[action$="/confirm"]').getAttribute('action');
+ await page.locator('[data-theme-toggle]').click();
+ await checkAccessibility('import-preview-light');
+ await page.setViewportSize({width:390,height:900});
+ await page.screenshot({path:path.join(output,'ledger-import-light-mobile.png'),fullPage:true});
+ const importCsrf=await page.locator('form[action$="/confirm"] [name=csrf_token]').inputValue();
+ await Promise.all([page.waitForNavigation(),page.getByRole('button',{name:'Confirma importul (2)',exact:true}).click()]);
+ await page.getByRole('heading',{name:'Import incheiat.',exact:true}).waitFor();
+ await checkAccessibility('import-result');
+ await page.request.post(base+confirmation,{form:{csrf_token:importCsrf}});
+ const exportedImport=await (await page.request.get(base+'/?export=csv')).text();
+ assert.equal((exportedImport.match(/CSV salariu/g)||[]).length,1);
+ assert.equal((exportedImport.match(/CSV cumparaturi/g)||[]).length,1);
  await page.getByRole('button',{name:'Iesi din cont'}).click();
  await page.getByRole('heading',{name:'Login',exact:true}).waitFor();
  await page.screenshot({path:path.join(output, 'ledger-login-mobile.png'),fullPage:true});
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({result:'passed',viewports:[320,375,390,768,1440],checks:'login, CRUD, CSRF, PRG, totals, reports, budgets, recurring, duplicate protection, month isolation, limits, filters, theme, dialogs, shortcuts, logout, no overflow, no browser errors'}));
+ console.log(JSON.stringify({result:'passed',viewports:[320,375,390,768,1440],checks:'login, CRUD, CSRF, PRG, totals, reports, budgets, recurring, CSV mapping/preview/import/replay, duplicate protection, month isolation, limits, filters, theme, dialogs, shortcuts, logout, no overflow, no browser errors'}));
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

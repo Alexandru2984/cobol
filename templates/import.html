@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Import CSV · Ledger of Ages</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/import.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Sari la continut</a>
+<aside class="sidebar">
+  <a class="brand" href="/"><span class="brand-mark">L<span>·</span></span><span>Ledger<span class="brand-small">OF AGES</span></span></a>
+  <p class="sidebar-label">SPATIUL TAU FINANCIAR</p>
+  <nav aria-label="Navigare principala">
+    <a href="/"><span aria-hidden="true">▦</span> Tranzactii</a>
+    <a href="/?view=REPORT"><span aria-hidden="true">↗</span> Raport lunar</a>
+    <a href="/?view=BUDGET"><span aria-hidden="true">◉</span> Bugete</a>
+    <a href="/?view=RECURRING"><span aria-hidden="true">⇄</span> Recurente</a>
+    <a href="/import" aria-current="page"><span aria-hidden="true">↓</span> Import CSV</a>
+    <a href="/?view=AUDIT"><span aria-hidden="true">◎</span> Activitate</a>
+  </nav>
+  <div class="sidebar-note"><span class="status-dot"></span>Un singur registru.<br><b>Mai putina munca manuala.</b></div>
+  <div class="account"><div><b>Registru personal</b><small>Import privat</small></div><button type="button" class="theme-toggle" data-theme-toggle aria-label="Schimba tema" title="Schimba tema">◐</button></div>
+  <form method="post" action="/" class="logout-form"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="cmd" value="logout"><button class="logout" type="submit">Iesi din cont</button></form>
+</aside>
+<main id="main" class="workspace import-workspace">
+  <header class="page-heading"><div><p class="eyebrow">FINANTE PERSONALE / IMPORT CSV</p><h1>Din fisier,<br>direct in registru.</h1><p>Verifica fiecare rand inainte de a adauga tranzactiile.</p></div><a class="btn secondary" href="/">Inapoi la registru</a></header>
+  <ol class="import-steps" aria-label="Etapele importului">
+    {% for label in ['Fisier', 'Coloane', 'Verificare', 'Rezultat'] %}
+    <li{% if loop.index0 == {'upload':0,'mapping':1,'preview':2,'done':3}[stage] %} aria-current="step"{% endif %}><span>{{ loop.index }}</span> {{ label }}</li>
+    {% endfor %}
+  </ol>
+  {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
+  {% if message %}<div class="notice" role="alert">{{ message }}</div>{% endif %}
+  {% if stage == 'upload' %}
+  <section class="panel import-panel" aria-labelledby="upload-title">
+    <p class="eyebrow">01 / ALEGE FISIERUL</p><h2 id="upload-title">Mai multe tranzactii. Un singur import.</h2>
+    <p class="import-copy">CSV in UTF-8, cu antet, cel mult 200 de tranzactii si 64 KiB. Sumele pozitive sunt venituri, cele negative sunt cheltuieli. Valorile folosesc aceeasi moneda ca registrul tau.</p>
+    <form method="post" action="/import" enctype="multipart/form-data" class="import-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <label for="csv-file">Fisier CSV<input id="csv-file" type="file" name="file" accept=".csv,text/csv" required aria-describedby="file-help"></label>
+      <small id="file-help">Previzualizarea este privata si expira dupa 30 de minute.</small>
+      <div class="import-fields">
+        <label for="delimiter">Separator coloane<select id="delimiter" name="delimiter"><option value="auto">Detectare automata</option><option value=",">Virgula (,)</option><option value=";">Punct si virgula (;)</option><option value="&#9;">Tab</option></select></label>
+        <label for="decimal">Separator zecimal<select id="decimal" name="decimal"><option value=".">Punct: -125.50</option><option value=",">Virgula: -125,50</option></select></label>
+        <label for="date-format">Format data<select id="date-format" name="date_format"><option value="iso">AAAA-LL-ZZ</option><option value="dmy">ZZ.LL.AAAA / ZZ/LL/AAAA</option></select></label>
+      </div>
+      <p class="import-copy">Sumele se introduc fara separatori de mii. La pasul urmator alegi coloanele; tranzactiile se salveaza doar dupa confirmarea finala.</p>
+      <div class="import-actions"><button type="submit" class="btn">Continua la coloane →</button><a href="/import/example.csv">Descarca un CSV model</a></div>
+    </form>
+  </section>
+  {% if recent %}<section class="panel" aria-labelledby="recent-title"><h2 id="recent-title">Importurile acestei sesiuni</h2><ul class="import-recent">{% for item in recent %}<li><span>{{ item.added|string + ' adaugate · ' + item.skipped|string + ' omise' if item.state == 'done' else 'Previzualizare in lucru' }}</span><a href="/import/{{ item.token }}">{{ 'Vezi rezultatul' if item.state == 'done' else 'Continua verificarea' }}<span class="sr-only"> — lot {{ loop.index }}</span> →</a></li>{% endfor %}</ul></section>{% endif %}
+  {% elif stage == 'mapping' %}
+  <section class="panel import-panel" aria-labelledby="mapping-title">
+    <p class="eyebrow">02 / ASOCIAZA COLOANELE</p><h2 id="mapping-title">Fiecare coloana, la locul ei.</h2>
+    <p class="import-copy">{{ table|length - 1 }} randuri gasite. Verifica asocierea de mai jos; ID-urile din fisier nu sunt importate.</p>
+    <form method="post" action="/import/{{ token }}/preview" class="import-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <div class="import-fields">
+        {% for key, label in [('day','Data'),('category','Categoria'),('description','Descrierea'),('amount','Suma')] %}
+        <label for="map-{{ key }}">{{ label }}<select id="map-{{ key }}" name="{{ key }}" required><option value="">Alege coloana</option>{% if key == 'category' %}<option value="-1"{% if mapping[key] == -1 %} selected{% endif %}>Foloseste categoria implicita</option>{% endif %}{% for header in table[0] %}<option value="{{ loop.index0 }}"{% if mapping[key] == loop.index0 %} selected{% endif %}>{{ loop.index }}. {{ header }}</option>{% endfor %}</select></label>
+        {% endfor %}
+        <label for="default-category">Categorie implicita<select id="default-category" name="default_category">{% for category in categories %}<option{% if options.get('category', 'Hobby') == category %} selected{% endif %}>{{ category }}</option>{% endfor %}</select></label>
+        <label for="duplicates">Randuri identice<select id="duplicates" name="duplicates"><option value="skip">Omite duplicatele</option><option value="include"{% if options.get('duplicates') == 'include' %} selected{% endif %}>Importa inclusiv duplicatele</option></select></label>
+      </div>
+      <label class="import-checkbox"><input type="checkbox" name="ledger_export" value="yes"{% if options.get('ledger_export') %} checked{% endif %}>Fisier exportat din Ledger of Ages; elimina apostroful de protectie Excel din descrieri.</label>
+      <p class="import-copy">Un duplicat are aceeasi data, categorie, descriere si suma. Pot exista tranzactii legitime identice; tu alegi daca le incluzi.</p>
+      <div class="import-actions"><button type="submit" class="btn">Verifica tranzactiile →</button><a href="/import">Alege alt fisier</a></div>
+    </form>
+  </section>
+  <section class="panel" aria-labelledby="sample-title"><h2 id="sample-title">Primele randuri din fisier</h2><div class="import-table-scroll" role="region" aria-label="Exemplu din CSV" tabindex="0"><table class="import-table"><thead><tr>{% for header in table[0] %}<th scope="col">{{ header }}</th>{% endfor %}</tr></thead><tbody>{% for row in table[1:4] %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div></section>
+  {% elif stage == 'preview' %}
+  <section class="metrics import-metrics" aria-label="Rezumat import"><article class="metric"><span class="metric-label">De adaugat</span><strong>{{ added }}</strong><small>Tranzactii validate</small></article><article class="metric"><span class="metric-label">Duplicate omise</span><strong>{{ skipped }}</strong><small>Din fisier sau din registru</small></article><article class="metric"><span class="metric-label">Efect asupra soldului</span><strong>{{ net|cents }}</strong><small>Doar tranzactiile de adaugat</small></article></section>
+  <section class="panel" aria-labelledby="preview-title"><p class="eyebrow">03 / ULTIMA VERIFICARE</p><h2 id="preview-title">Tu confirmi ce intra in registru.</h2>
+    {% if not valid %}<div class="err" role="alert">Importul este blocat pana corectezi toate erorile. Modifica maparea sau incarca un fisier corectat.</div>{% else %}<p class="import-copy">Nicio tranzactie din acest fisier nu a fost adaugata inca. Confirmarea salveaza intregul lot; repetarea ei nu dubleaza importul.</p>{% endif %}
+    <div class="import-table-scroll" role="region" aria-label="Tranzactii de verificat" tabindex="0"><table class="import-table import-preview-table"><thead><tr><th scope="col">Rand</th><th scope="col">Data</th><th scope="col">Categorie</th><th scope="col">Descriere</th><th scope="col">Suma</th><th scope="col">Rezultat</th></tr></thead><tbody>{% for item in rows %}<tr class="{{ 'import-invalid' if item.error else 'import-skipped' if item.skip else '' }}"><td data-label="Rand">{{ item.line }}</td><td data-label="Data">{{ item.row[0] }}</td><td data-label="Categorie">{{ item.row[1] }}</td><td data-label="Descriere">{{ item.row[2] }}</td><td class="amount" data-label="Suma">{{ item.row[3]|cents if not item.error else '—' }}</td><td data-label="Rezultat">{% if item.error %}<span class="neg">{{ item.error }}</span>{% elif item.skip %}Duplicat · omis{% elif item.duplicate %}Identic · inclus{% else %}De adaugat{% endif %}</td></tr>{% endfor %}</tbody></table></div>
+    <div class="import-actions"><form method="post" action="/import/{{ token }}/confirm"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button type="submit" class="btn"{% if not valid %} disabled{% endif %}>Confirma importul ({{ added }})</button></form><a href="/import/{{ token }}/mapping">Modifica maparea</a><a href="/import">Alt fisier</a></div>
+  </section>
+  {% elif stage == 'done' %}
+  <section class="panel import-panel import-result" aria-labelledby="done-title"><p class="eyebrow">04 / TOTUL ESTE SALVAT</p><h2 id="done-title">Import incheiat.</h2><p class="import-result-count">{{ added }}<span>tranzactii adaugate</span></p><p>{{ skipped }} duplicate omise. Acest lot este confirmat; reincarcarea paginii nu adauga tranzactii.</p><div class="import-actions"><a class="btn" href="/">Vezi registrul →</a><a href="/import">Importa alt fisier</a></div></section>
+  {% endif %}
+  <footer class="page-footer"><span>LEDGER OF AGES</span><span>Datele tale, in registrul tau.</span></footer>
+</main>
+</body>
+</html>

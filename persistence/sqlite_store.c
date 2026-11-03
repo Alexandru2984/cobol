@@ -48,7 +48,11 @@ static int open_store(void) {
             SQLITE_OPEN_READWRITE | (exists ? 0 : SQLITE_OPEN_CREATE) | SQLITE_OPEN_NOFOLLOW, NULL) != SQLITE_OK)
         return SQLITE_CANTOPEN;
     sqlite3_busy_timeout(db, 1000);
-    if (sqlite3_exec(db, "PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE;", NULL, NULL, NULL) != SQLITE_OK)
+    sqlite3_db_config(db, SQLITE_DBCONFIG_DEFENSIVE, 1, NULL);
+    sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 0, NULL);
+    sqlite3_limit(db, SQLITE_LIMIT_LENGTH, 1024 * 1024);
+    sqlite3_limit(db, SQLITE_LIMIT_ATTACHED, 0);
+    if (sqlite3_exec(db, "PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE;", NULL, NULL, NULL) != SQLITE_OK)
         return SQLITE_ERROR;
     if (!exists) {
         if (chmod("data/ledger.sqlite3", 0600) || sqlite3_exec(db, schema, NULL, NULL, NULL) != SQLITE_OK)

@@ -80,6 +80,15 @@ Pagina `/about` prezintă funcțiile cu date demonstrative; canonical, Open Grap
 Twitter Card, imagine socială, sitemap și robots pentru descoperire. Registrul,
 rapoartele, bugetele și recurentele rămân autentificate și noindex.
 
-Prioritatea următoare de produs: import CSV cu previzualizare și detectare de duplicate,
-apoi conturi/transferuri și obiective de economisire. O migrare SQLite are propria etapă
-de comparație și restaurare, descrisă în `ARCHITECTURE.md`.
+## Etapa 6 livrată: SQLite și import CSV
+
+Migrare verificată rând cu rând, sume în bani și păstrarea originalelor. Import CSV
+cu maparea coloanelor, formate de dată/sumă, categorie implicită, erori pe rând,
+duplicate din fișier și registru, confirmare atomică și reîncercare idempotentă.
+Previzualizare cu carduri pe mobil, temă luminoasă/întunecată și rezultate ale
+importurilor din sesiunea curentă. Teste de întrerupere de proces înainte/după COMMIT,
+cereri paralele, rollback, sesiuni, CSRF și verificări reale în Chromium/Axe.
+
+Urmează: conturi numerar/card și transferuri care nu umflă veniturile sau cheltuielile;
+apoi obiective de economisire cu progres și contribuții. Fiecare are migrare versionată,
+validarea soldurilor și commit separat. CI și SEO continuă să acopere funcțiile livrate.

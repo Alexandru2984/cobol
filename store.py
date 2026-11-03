@@ -16,6 +16,10 @@ def connect(work_dir):
     connection = sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, timeout=1,
                                  isolation_level=None)
     try:
+        connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 1024 * 1024)
+        connection.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
+        connection.enable_load_extension(False)
+        connection.execute("PRAGMA trusted_schema=OFF")
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA synchronous=FULL")
         if connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID or (

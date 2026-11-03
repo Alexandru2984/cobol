@@ -13,6 +13,7 @@ No database service, CDN fonts or JavaScript framework is required.
 ## Features
 
 - Add, edit and delete transactions with confirmation and redirect after saving.
+- CSV import with column mapping, previews, row validation, duplicate decisions and atomic, idempotent confirmation.
 - Income, expenses, net balance, savings rate and category summaries.
 - Weekly/monthly/yearly recurring plans, previews, pause/resume and occurrence deduplication.
 - Monthly expense budgets with category limits, progress, alerts and month navigation.
